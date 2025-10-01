@@ -951,24 +951,21 @@ async def pay_with_wallet(user_id: str, amount: float, order_id: str):
 @api_router.post("/admin/login")
 async def admin_login(credentials: AdminLogin):
     """Admin login (simplified - in production, use proper authentication)"""
-    try:
-        # For demo purposes, hardcoded admin credentials
-        # In production, use proper password hashing and JWT tokens
-        if credentials.username == "admin" and credentials.password == "memories2024":
-            admin_data = {
-                "id": "admin_001",
-                "username": "admin",
-                "email": "admin@memories.com",
-                "role": "super_admin",
-                "permissions": ["products", "reviews", "users", "orders", "analytics"],
-                "created_at": datetime.now(timezone.utc).isoformat(),
-                "last_login": datetime.now(timezone.utc).isoformat()
-            }
-            return {"success": True, "admin": admin_data, "token": "demo_admin_token"}
-        else:
-            raise HTTPException(status_code=401, detail="Invalid credentials")
-    except Exception as e:
-        raise HTTPException(status_code=500, detail="Login failed")
+    # For demo purposes, hardcoded admin credentials
+    # In production, use proper password hashing and JWT tokens
+    if credentials.username == "admin" and credentials.password == "memories2024":
+        admin_data = {
+            "id": "admin_001",
+            "username": "admin",
+            "email": "admin@memories.com",
+            "role": "super_admin",
+            "permissions": ["products", "reviews", "users", "orders", "analytics"],
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "last_login": datetime.now(timezone.utc).isoformat()
+        }
+        return {"success": True, "admin": admin_data, "token": "demo_admin_token"}
+    else:
+        raise HTTPException(status_code=401, detail="Invalid credentials")
 
 @api_router.get("/admin/stats")
 async def get_admin_stats():
