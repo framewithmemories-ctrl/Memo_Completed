@@ -1030,7 +1030,10 @@ async def approve_review(review_id: str, approved: bool):
         if result.modified_count == 0:
             raise HTTPException(status_code=404, detail="Review not found")
         return {"success": True, "approved": approved}
+    except HTTPException:
+        raise
     except Exception as e:
+        logger.error(f"Admin review approve error: {str(e)}")
         raise HTTPException(status_code=500, detail="Failed to update review")
 
 @api_router.delete("/admin/reviews/{review_id}")
