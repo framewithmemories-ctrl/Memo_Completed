@@ -31,6 +31,28 @@ app = FastAPI()
 api_router = APIRouter(prefix="/api")
 
 # Models
+class Admin(BaseModel):
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    username: str
+    email: str
+    role: str = "admin"  # admin, super_admin
+    permissions: List[str] = []  # products, reviews, users, orders, analytics
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    last_login: Optional[datetime] = None
+
+class AdminLogin(BaseModel):
+    username: str
+    password: str
+
+class AdminStats(BaseModel):
+    total_users: int
+    total_orders: int
+    total_revenue: float
+    pending_reviews: int
+    total_products: int
+    recent_orders: List[dict]
+    top_products: List[dict]
+
 class Review(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     name: str
