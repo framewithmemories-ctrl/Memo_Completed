@@ -1050,6 +1050,503 @@ class PhotoGiftHubAPITester:
         
         return workflow_success_rate > 80
 
+    # ============================================================================
+    # ADMIN PANEL API TESTS
+    # ============================================================================
+
+    def test_admin_login(self):
+        """Test admin login functionality"""
+        try:
+            # Test with correct credentials
+            correct_credentials = {
+                "username": "admin",
+                "password": "memories2024"
+            }
+            
+            response = requests.post(f"{self.api_url}/admin/login", json=correct_credentials, timeout=10)
+            success = response.status_code == 200
+            
+            if success:
+                data = response.json()
+                required_fields = ['success', 'admin', 'token']
+                missing_fields = [field for field in required_fields if field not in data]
+                
+                if missing_fields:
+                    success = False
+                    details = f"Missing login response fields: {missing_fields}"
+                else:
+                    admin_data = data['admin']
+                    admin_required_fields = ['id', 'username', 'email', 'role', 'permissions']
+                    admin_missing_fields = [field for field in admin_required_fields if field not in admin_data]
+                    
+                    if admin_missing_fields:
+                        success = False
+                        details = f"Missing admin data fields: {admin_missing_fields}"
+                    else:
+                        details = f"Admin login successful - Username: {admin_data['username']}, Role: {admin_data['role']}, Permissions: {len(admin_data['permissions'])}"
+                        # Store token for subsequent admin tests
+                        self.admin_token = data['token']
+            else:
+                details = f"Status: {response.status_code}, Response: {response.text}"
+            
+            self.log_test("Admin Login - Correct Credentials", success, details)
+            
+            # Test with incorrect credentials
+            incorrect_credentials = {
+                "username": "admin",
+                "password": "wrongpassword"
+            }
+            
+            response = requests.post(f"{self.api_url}/admin/login", json=incorrect_credentials, timeout=10)
+            incorrect_success = response.status_code == 401
+            
+            if incorrect_success:
+                details = "Correctly rejected invalid credentials with 401 status"
+            else:
+                details = f"Expected 401 for invalid credentials, got {response.status_code}"
+            
+            self.log_test("Admin Login - Incorrect Credentials", incorrect_success, details)
+            
+            return success and incorrect_success
+            
+        except Exception as e:
+            self.log_test("Admin Login", False, str(e))
+            return False
+
+    def test_admin_dashboard_stats(self):
+        """Test admin dashboard statistics"""
+        try:
+            response = requests.get(f"{self.api_url}/admin/stats", timeout=10)
+            success = response.status_code == 200
+            
+            if success:
+                stats = response.json()
+                required_fields = ['total_users', 'total_orders', 'total_revenue', 'pending_reviews', 'total_products', 'recent_orders', 'top_products']
+                missing_fields = [field for field in required_fields if field not in stats]
+                
+                if missing_fields:
+                    success = False
+                    details = f"Missing stats fields: {missing_fields}"
+                else:
+                    # Validate data types and ranges
+                    validation_errors = []
+                    
+                    if not isinstance(stats['total_users'], int) or stats['total_users'] < 0:
+                        validation_errors.append("total_users should be non-negative integer")
+                    
+                    if not isinstance(stats['total_orders'], int) or stats['total_orders'] < 0:
+                        validation_errors.append("total_orders should be non-negative integer")
+                    
+                    if not isinstance(stats['total_revenue'], (int, float)) or stats['total_revenue'] < 0:
+                        validation_errors.append("total_revenue should be non-negative number")
+                    
+                    if not isinstance(stats['pending_reviews'], int) or stats['pending_reviews'] < 0:
+                        validation_errors.append("pending_reviews should be non-negative integer")
+                    
+                    if not isinstance(stats['total_products'], int) or stats['total_products'] < 0:
+                        validation_errors.append("total_products should be non-negative integer")
+                    
+                    if not isinstance(stats['recent_orders'], list):
+                        validation_errors.append("recent_orders should be a list")
+                    
+                    if not isinstance(stats['top_products'], list):
+                        validation_errors.append("top_products should be a list")
+                    
+                    if validation_errors:
+                        success = False
+                        details = f"Validation errors: {', '.join(validation_errors)}"
+                    else:
+                        details = f"Stats retrieved - Users: {stats['total_users']}, Orders: {stats['total_orders']}, Revenue: ₹{stats['total_revenue']}, Pending Reviews: {stats['pending_reviews']}, Products: {stats['total_products']}, Recent Orders: {len(stats['recent_orders'])}, Top Products: {len(stats['top_products'])}"
+            else:
+                details = f"Status: {response.status_code}, Response: {response.text}"
+            
+            self.log_test("Admin Dashboard Stats", success, details)
+            return success
+            
+        except Exception as e:
+            self.log_test("Admin Dashboard Stats", False, str(e))
+            return False
+
+    def test_admin_review_management(self):
+        """Test admin review management endpoints"""
+        try:
+            # First create a test review to manage
+            review_data = {
+                "name": f"Admin Test Review {datetime.now().strftime('%H%M%S')}",
+                "rating": 4,
+                "comment": "Test review for admin management testing",
+                "photos": [],
+                "product_id": "test-product"
+            }
+            
+            create_response = requests.post(f"{self.api_url}/reviews", json=review_data, timeout=10)
+            if create_response.status_code != 200:
+                self.log_test("Admin Review Management - Setup", False, "Failed to create test review")
+                return False
+            
+            review_id = create_response.json().get('id')
+            
+            # Test 1: Get all reviews
+            all_reviews_response = requests.get(f"{self.api_url}/admin/reviews", timeout=10)
+            all_reviews_success = all_reviews_response.status_code == 200
+            
+            if all_reviews_success:
+                all_reviews_data = all_reviews_response.json()
+                if 'reviews' not in all_reviews_data:
+                    all_reviews_success = False
+                    all_reviews_details = "Missing 'reviews' field in response"
+                else:
+                    all_reviews_details = f"Retrieved {len(all_reviews_data['reviews'])} reviews"
+            else:
+                all_reviews_details = f"Status: {all_reviews_response.status_code}"
+            
+            self.log_test("Admin Reviews - Get All", all_reviews_success, all_reviews_details)
+            
+            # Test 2: Get pending reviews
+            pending_response = requests.get(f"{self.api_url}/admin/reviews?status=pending", timeout=10)
+            pending_success = pending_response.status_code == 200
+            
+            if pending_success:
+                pending_data = pending_response.json()
+                pending_details = f"Retrieved {len(pending_data.get('reviews', []))} pending reviews"
+            else:
+                pending_details = f"Status: {pending_response.status_code}"
+            
+            self.log_test("Admin Reviews - Get Pending", pending_success, pending_details)
+            
+            # Test 3: Get approved reviews
+            approved_response = requests.get(f"{self.api_url}/admin/reviews?status=approved", timeout=10)
+            approved_success = approved_response.status_code == 200
+            
+            if approved_success:
+                approved_data = approved_response.json()
+                approved_details = f"Retrieved {len(approved_data.get('reviews', []))} approved reviews"
+            else:
+                approved_details = f"Status: {approved_response.status_code}"
+            
+            self.log_test("Admin Reviews - Get Approved", approved_success, approved_details)
+            
+            # Test 4: Approve review
+            approve_response = requests.put(f"{self.api_url}/admin/reviews/{review_id}/approve?approved=true", timeout=10)
+            approve_success = approve_response.status_code == 200
+            
+            if approve_success:
+                approve_data = approve_response.json()
+                if approve_data.get('success') and approve_data.get('approved'):
+                    approve_details = "Review approved successfully"
+                else:
+                    approve_success = False
+                    approve_details = "Approval response invalid"
+            else:
+                approve_details = f"Status: {approve_response.status_code}"
+            
+            self.log_test("Admin Reviews - Approve", approve_success, approve_details)
+            
+            # Test 5: Delete review
+            delete_response = requests.delete(f"{self.api_url}/admin/reviews/{review_id}", timeout=10)
+            delete_success = delete_response.status_code == 200
+            
+            if delete_success:
+                delete_data = delete_response.json()
+                if delete_data.get('success') and delete_data.get('deleted'):
+                    delete_details = "Review deleted successfully"
+                else:
+                    delete_success = False
+                    delete_details = "Delete response invalid"
+            else:
+                delete_details = f"Status: {delete_response.status_code}"
+            
+            self.log_test("Admin Reviews - Delete", delete_success, delete_details)
+            
+            # Overall success
+            overall_success = all([all_reviews_success, pending_success, approved_success, approve_success, delete_success])
+            return overall_success
+            
+        except Exception as e:
+            self.log_test("Admin Review Management", False, str(e))
+            return False
+
+    def test_admin_order_management(self):
+        """Test admin order management endpoints"""
+        try:
+            # First create a test user and order
+            user_data = {
+                "name": f"Admin Test User {datetime.now().strftime('%H%M%S')}",
+                "email": f"admintest_{datetime.now().strftime('%H%M%S')}@example.com",
+                "phone": "+91 9876543210"
+            }
+            
+            user_response = requests.post(f"{self.api_url}/users", json=user_data, timeout=10)
+            if user_response.status_code != 200:
+                self.log_test("Admin Order Management - Setup", False, "Failed to create test user")
+                return False
+            
+            user_id = user_response.json().get('id')
+            
+            # Create test order
+            order_data = {
+                "user_id": user_id,
+                "items": [
+                    {
+                        "product_id": "test-frame",
+                        "name": "Test Frame",
+                        "quantity": 1,
+                        "price": 899.0
+                    }
+                ],
+                "total_amount": 899.0,
+                "delivery_type": "pickup",
+                "pickup_slot": "2025-01-15 10:00"
+            }
+            
+            order_response = requests.post(f"{self.api_url}/orders", json=order_data, timeout=10)
+            if order_response.status_code != 200:
+                self.log_test("Admin Order Management - Setup", False, "Failed to create test order")
+                return False
+            
+            order_id = order_response.json().get('id')
+            
+            # Test 1: Get all orders
+            all_orders_response = requests.get(f"{self.api_url}/admin/orders", timeout=10)
+            all_orders_success = all_orders_response.status_code == 200
+            
+            if all_orders_success:
+                all_orders_data = all_orders_response.json()
+                if 'orders' not in all_orders_data:
+                    all_orders_success = False
+                    all_orders_details = "Missing 'orders' field in response"
+                else:
+                    all_orders_details = f"Retrieved {len(all_orders_data['orders'])} orders"
+            else:
+                all_orders_details = f"Status: {all_orders_response.status_code}"
+            
+            self.log_test("Admin Orders - Get All", all_orders_success, all_orders_details)
+            
+            # Test 2: Get orders by status
+            pending_orders_response = requests.get(f"{self.api_url}/admin/orders?status=pending", timeout=10)
+            pending_orders_success = pending_orders_response.status_code == 200
+            
+            if pending_orders_success:
+                pending_orders_data = pending_orders_response.json()
+                pending_orders_details = f"Retrieved {len(pending_orders_data.get('orders', []))} pending orders"
+            else:
+                pending_orders_details = f"Status: {pending_orders_response.status_code}"
+            
+            self.log_test("Admin Orders - Get Pending", pending_orders_success, pending_orders_details)
+            
+            # Test 3: Update order status - valid transitions
+            valid_statuses = ["processing", "completed", "cancelled"]
+            status_update_results = []
+            
+            for status in valid_statuses:
+                status_response = requests.put(f"{self.api_url}/admin/orders/{order_id}/status?status={status}", timeout=10)
+                status_success = status_response.status_code == 200
+                
+                if status_success:
+                    status_data = status_response.json()
+                    if status_data.get('success') and status_data.get('status') == status:
+                        status_details = f"Order status updated to {status}"
+                    else:
+                        status_success = False
+                        status_details = f"Status update response invalid for {status}"
+                else:
+                    status_details = f"Status update failed for {status}: {status_response.status_code}"
+                
+                self.log_test(f"Admin Orders - Update Status to {status}", status_success, status_details)
+                status_update_results.append(status_success)
+            
+            # Test 4: Invalid status update
+            invalid_status_response = requests.put(f"{self.api_url}/admin/orders/{order_id}/status?status=invalid_status", timeout=10)
+            invalid_status_success = invalid_status_response.status_code == 400
+            
+            if invalid_status_success:
+                invalid_status_details = "Correctly rejected invalid status with 400 error"
+            else:
+                invalid_status_details = f"Expected 400 for invalid status, got {invalid_status_response.status_code}"
+            
+            self.log_test("Admin Orders - Invalid Status Update", invalid_status_success, invalid_status_details)
+            
+            # Overall success
+            overall_success = all([all_orders_success, pending_orders_success] + status_update_results + [invalid_status_success])
+            return overall_success
+            
+        except Exception as e:
+            self.log_test("Admin Order Management", False, str(e))
+            return False
+
+    def test_admin_user_management(self):
+        """Test admin user management endpoints"""
+        try:
+            response = requests.get(f"{self.api_url}/admin/users", timeout=10)
+            success = response.status_code == 200
+            
+            if success:
+                data = response.json()
+                if 'users' not in data:
+                    success = False
+                    details = "Missing 'users' field in response"
+                else:
+                    users = data['users']
+                    details = f"Retrieved {len(users)} users"
+                    
+                    # Check user data structure if users exist
+                    if users:
+                        first_user = users[0]
+                        required_fields = ['id', 'name', 'email', 'wallet_balance', 'total_spent', 'tier', 'points']
+                        missing_fields = [field for field in required_fields if field not in first_user]
+                        
+                        if missing_fields:
+                            success = False
+                            details += f", Missing user fields: {missing_fields}"
+                        else:
+                            details += f", Sample user: {first_user['name']}, Wallet: ₹{first_user['wallet_balance']}, Tier: {first_user['tier']}, Spent: ₹{first_user['total_spent']}"
+            else:
+                details = f"Status: {response.status_code}, Response: {response.text}"
+            
+            self.log_test("Admin User Management", success, details)
+            return success
+            
+        except Exception as e:
+            self.log_test("Admin User Management", False, str(e))
+            return False
+
+    def test_admin_product_management(self):
+        """Test admin product management endpoints"""
+        try:
+            # First get a product to test with
+            products_response = requests.get(f"{self.api_url}/products", timeout=10)
+            if products_response.status_code != 200:
+                self.log_test("Admin Product Management - Setup", False, "Failed to get products")
+                return False
+            
+            products = products_response.json()
+            if not products:
+                self.log_test("Admin Product Management - Setup", False, "No products available for testing")
+                return False
+            
+            product_id = products[0]['id']
+            
+            # Test 1: Update product
+            update_data = {
+                "name": f"Updated Product Name {datetime.now().strftime('%H%M%S')}",
+                "description": "Updated description for admin testing",
+                "base_price": 999.0
+            }
+            
+            update_response = requests.put(f"{self.api_url}/admin/products/{product_id}", json=update_data, timeout=10)
+            update_success = update_response.status_code == 200
+            
+            if update_success:
+                update_result = update_response.json()
+                if update_result.get('success') and update_result.get('updated'):
+                    update_details = "Product updated successfully"
+                else:
+                    update_success = False
+                    update_details = "Update response invalid"
+            else:
+                update_details = f"Status: {update_response.status_code}"
+            
+            self.log_test("Admin Products - Update", update_success, update_details)
+            
+            # Test 2: Delete product (create a test product first)
+            test_product_data = {
+                "name": f"Test Product for Deletion {datetime.now().strftime('%H%M%S')}",
+                "description": "Test product that will be deleted",
+                "category": "test",
+                "base_price": 100.0,
+                "sizes": [{"name": "Standard", "price_add": 0}],
+                "materials": [{"name": "Standard", "price_add": 0}],
+                "colors": [{"name": "Standard", "price_add": 0}],
+                "image_url": "https://example.com/test.jpg"
+            }
+            
+            create_response = requests.post(f"{self.api_url}/products", json=test_product_data, timeout=10)
+            if create_response.status_code != 200:
+                self.log_test("Admin Products - Delete Setup", False, "Failed to create test product for deletion")
+                return update_success
+            
+            test_product_id = create_response.json().get('id')
+            
+            # Now delete the test product
+            delete_response = requests.delete(f"{self.api_url}/admin/products/{test_product_id}", timeout=10)
+            delete_success = delete_response.status_code == 200
+            
+            if delete_success:
+                delete_result = delete_response.json()
+                if delete_result.get('success') and delete_result.get('deleted'):
+                    delete_details = "Product deleted successfully"
+                else:
+                    delete_success = False
+                    delete_details = "Delete response invalid"
+            else:
+                delete_details = f"Status: {delete_response.status_code}"
+            
+            self.log_test("Admin Products - Delete", delete_success, delete_details)
+            
+            # Test 3: Try to delete non-existent product
+            non_existent_response = requests.delete(f"{self.api_url}/admin/products/non-existent-id", timeout=10)
+            non_existent_success = non_existent_response.status_code == 404
+            
+            if non_existent_success:
+                non_existent_details = "Correctly returned 404 for non-existent product"
+            else:
+                non_existent_details = f"Expected 404 for non-existent product, got {non_existent_response.status_code}"
+            
+            self.log_test("Admin Products - Delete Non-existent", non_existent_success, non_existent_details)
+            
+            # Overall success
+            overall_success = all([update_success, delete_success, non_existent_success])
+            return overall_success
+            
+        except Exception as e:
+            self.log_test("Admin Product Management", False, str(e))
+            return False
+
+    def test_admin_panel_workflow(self):
+        """Test complete admin panel workflow"""
+        print("\n👑 Testing Admin Panel APIs Workflow")
+        print("-" * 50)
+        
+        # Test 1: Admin Authentication
+        login_success = self.test_admin_login()
+        
+        # Test 2: Dashboard Statistics
+        stats_success = self.test_admin_dashboard_stats()
+        
+        # Test 3: Review Management
+        review_mgmt_success = self.test_admin_review_management()
+        
+        # Test 4: Order Management
+        order_mgmt_success = self.test_admin_order_management()
+        
+        # Test 5: User Management
+        user_mgmt_success = self.test_admin_user_management()
+        
+        # Test 6: Product Management
+        product_mgmt_success = self.test_admin_product_management()
+        
+        # Calculate workflow success
+        admin_tests = [login_success, stats_success, review_mgmt_success, order_mgmt_success, user_mgmt_success, product_mgmt_success]
+        admin_success_rate = sum(admin_tests) / len(admin_tests) * 100
+        
+        print(f"\n📊 Admin Panel APIs Success Rate: {admin_success_rate:.1f}%")
+        
+        # Detailed analysis
+        if not login_success:
+            print("❌ CRITICAL: Admin authentication system not working")
+        if not stats_success:
+            print("⚠️  Dashboard statistics endpoint has issues")
+        if not review_mgmt_success:
+            print("⚠️  Review management functionality needs attention")
+        if not order_mgmt_success:
+            print("⚠️  Order management system has problems")
+        if not user_mgmt_success:
+            print("⚠️  User management endpoint not functioning properly")
+        if not product_mgmt_success:
+            print("⚠️  Product management operations failing")
+        
+        return admin_success_rate > 80
+
     def test_enhanced_ai_gift_finder_workflow(self):
         """Test complete Enhanced AI Gift Finder workflow"""
         print("\n🧠 Testing Enhanced AI Gift Finder Workflow")
