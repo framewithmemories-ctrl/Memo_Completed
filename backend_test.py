@@ -13,6 +13,7 @@ class PhotoGiftHubAPITester:
         self.tests_run = 0
         self.tests_passed = 0
         self.test_results = []
+        self.admin_token = None
 
     def log_test(self, name, success, details=""):
         """Log test results"""
