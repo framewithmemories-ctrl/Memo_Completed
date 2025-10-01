@@ -1128,6 +1128,7 @@ function App() {
           <Routes>
             <Route path="/" element={<Home />} />
             <Route path="/about" element={<AboutUsPage />} />
+            <Route path="/admin" element={<AdminPanel />} />
           </Routes>
         </BrowserRouter>
       </div>
