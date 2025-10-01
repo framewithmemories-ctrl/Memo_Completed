@@ -1063,11 +1063,11 @@ async def get_admin_orders(status: str = "all", limit: int = 100):
 @api_router.put("/admin/orders/{order_id}/status")
 async def update_order_status(order_id: str, status: str):
     """Update order status"""
+    valid_statuses = ["pending", "processing", "completed", "cancelled", "refunded"]
+    if status not in valid_statuses:
+        raise HTTPException(status_code=400, detail="Invalid status")
+    
     try:
-        valid_statuses = ["pending", "processing", "completed", "cancelled", "refunded"]
-        if status not in valid_statuses:
-            raise HTTPException(status_code=400, detail="Invalid status")
-        
         result = await db.orders.update_one(
             {"id": order_id},
             {"$set": {"status": status, "updated_at": datetime.now(timezone.utc)}}
@@ -1075,7 +1075,10 @@ async def update_order_status(order_id: str, status: str):
         if result.modified_count == 0:
             raise HTTPException(status_code=404, detail="Order not found")
         return {"success": True, "status": status}
+    except HTTPException:
+        raise
     except Exception as e:
+        logger.error(f"Admin order status update error: {str(e)}")
         raise HTTPException(status_code=500, detail="Failed to update order status")
 
 @api_router.get("/admin/users")
