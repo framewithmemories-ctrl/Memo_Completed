@@ -1660,6 +1660,9 @@ class PhotoGiftHubAPITester:
         # Test Reviews API System
         self.test_reviews_workflow()
         
+        # Test Admin Panel APIs
+        self.test_admin_panel_workflow()
+        
         # Print summary
         print("\n" + "=" * 50)
         print(f"📊 Test Summary: {self.tests_passed}/{self.tests_run} tests passed")
