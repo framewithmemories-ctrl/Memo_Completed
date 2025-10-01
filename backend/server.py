@@ -947,6 +947,172 @@ async def pay_with_wallet(user_id: str, amount: float, order_id: str):
         "transaction_id": transaction.id
     }
 
+# Admin Management Endpoints
+@api_router.post("/admin/login")
+async def admin_login(credentials: AdminLogin):
+    """Admin login (simplified - in production, use proper authentication)"""
+    try:
+        # For demo purposes, hardcoded admin credentials
+        # In production, use proper password hashing and JWT tokens
+        if credentials.username == "admin" and credentials.password == "memories2024":
+            admin_data = {
+                "id": "admin_001",
+                "username": "admin",
+                "email": "admin@memories.com",
+                "role": "super_admin",
+                "permissions": ["products", "reviews", "users", "orders", "analytics"],
+                "created_at": datetime.now(timezone.utc).isoformat(),
+                "last_login": datetime.now(timezone.utc).isoformat()
+            }
+            return {"success": True, "admin": admin_data, "token": "demo_admin_token"}
+        else:
+            raise HTTPException(status_code=401, detail="Invalid credentials")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail="Login failed")
+
+@api_router.get("/admin/stats")
+async def get_admin_stats():
+    """Get comprehensive admin dashboard statistics"""
+    try:
+        # Get counts from database
+        total_users = await db.users.count_documents({})
+        total_orders = await db.orders.count_documents({})
+        pending_reviews = await db.reviews.count_documents({"approved": False})
+        total_products = await db.products.count_documents({})
+        
+        # Calculate total revenue
+        orders = await db.orders.find({}).to_list(1000)
+        total_revenue = sum(order.get("total", 0) for order in orders)
+        
+        # Get recent orders (last 10)
+        recent_orders = await db.orders.find({}).sort("created_at", -1).limit(10).to_list(10)
+        
+        # Get top products (simplified)
+        top_products = [
+            {"name": "Classic Wooden Frame", "sales": 45, "revenue": 40455},
+            {"name": "Modern Acrylic Frame", "sales": 32, "revenue": 38400},
+            {"name": "Custom Photo Mug", "sales": 28, "revenue": 9772},
+        ]
+        
+        stats = AdminStats(
+            total_users=total_users,
+            total_orders=total_orders,
+            total_revenue=total_revenue,
+            pending_reviews=pending_reviews,
+            total_products=total_products,
+            recent_orders=[Order(**order) for order in recent_orders],
+            top_products=top_products
+        )
+        
+        return stats
+    except Exception as e:
+        raise HTTPException(status_code=500, detail="Failed to fetch admin statistics")
+
+@api_router.get("/admin/reviews")
+async def get_admin_reviews(status: str = "all", limit: int = 50):
+    """Get reviews for admin management"""
+    try:
+        filter_query = {}
+        if status == "pending":
+            filter_query["approved"] = False
+        elif status == "approved":
+            filter_query["approved"] = True
+        
+        reviews = await db.reviews.find(filter_query).sort("created_at", -1).limit(limit).to_list(limit)
+        return {"reviews": [Review(**review) for review in reviews]}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail="Failed to fetch reviews")
+
+@api_router.put("/admin/reviews/{review_id}/approve")
+async def approve_review(review_id: str, approved: bool):
+    """Approve or reject a review"""
+    try:
+        result = await db.reviews.update_one(
+            {"id": review_id},
+            {"$set": {"approved": approved}}
+        )
+        if result.modified_count == 0:
+            raise HTTPException(status_code=404, detail="Review not found")
+        return {"success": True, "approved": approved}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail="Failed to update review")
+
+@api_router.delete("/admin/reviews/{review_id}")
+async def delete_review(review_id: str):
+    """Delete a review"""
+    try:
+        result = await db.reviews.delete_one({"id": review_id})
+        if result.deleted_count == 0:
+            raise HTTPException(status_code=404, detail="Review not found")
+        return {"success": True, "deleted": True}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail="Failed to delete review")
+
+@api_router.get("/admin/orders")
+async def get_admin_orders(status: str = "all", limit: int = 100):
+    """Get orders for admin management"""
+    try:
+        filter_query = {}
+        if status != "all":
+            filter_query["status"] = status
+        
+        orders = await db.orders.find(filter_query).sort("created_at", -1).limit(limit).to_list(limit)
+        return {"orders": [Order(**order) for order in orders]}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail="Failed to fetch orders")
+
+@api_router.put("/admin/orders/{order_id}/status")
+async def update_order_status(order_id: str, status: str):
+    """Update order status"""
+    try:
+        valid_statuses = ["pending", "processing", "completed", "cancelled", "refunded"]
+        if status not in valid_statuses:
+            raise HTTPException(status_code=400, detail="Invalid status")
+        
+        result = await db.orders.update_one(
+            {"id": order_id},
+            {"$set": {"status": status, "updated_at": datetime.now(timezone.utc)}}
+        )
+        if result.modified_count == 0:
+            raise HTTPException(status_code=404, detail="Order not found")
+        return {"success": True, "status": status}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail="Failed to update order status")
+
+@api_router.get("/admin/users")
+async def get_admin_users(limit: int = 100):
+    """Get users for admin management"""
+    try:
+        users = await db.users.find({}).sort("created_at", -1).limit(limit).to_list(limit)
+        return {"users": [User(**user) for user in users]}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail="Failed to fetch users")
+
+@api_router.put("/admin/products/{product_id}")
+async def update_product_admin(product_id: str, product_update: dict):
+    """Update product (admin only)"""
+    try:
+        result = await db.products.update_one(
+            {"id": product_id},
+            {"$set": product_update}
+        )
+        if result.modified_count == 0:
+            raise HTTPException(status_code=404, detail="Product not found")
+        return {"success": True, "updated": True}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail="Failed to update product")
+
+@api_router.delete("/admin/products/{product_id}")
+async def delete_product_admin(product_id: str):
+    """Delete product (admin only)"""
+    try:
+        result = await db.products.delete_one({"id": product_id})
+        if result.deleted_count == 0:
+            raise HTTPException(status_code=404, detail="Product not found")
+        return {"success": True, "deleted": True}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail="Failed to delete product")
+
 # Include the router in the main app
 app.include_router(api_router)
 
