@@ -1227,7 +1227,11 @@ class PhotoGiftHubAPITester:
             
             self.log_test("Admin Reviews - Get Approved", approved_success, approved_details)
             
-            # Test 4: Approve review
+            # Test 4: Approve review (first set to unapproved, then approve)
+            # First set review to unapproved
+            unapprove_response = requests.put(f"{self.api_url}/admin/reviews/{review_id}/approve?approved=false", timeout=10)
+            
+            # Then approve it
             approve_response = requests.put(f"{self.api_url}/admin/reviews/{review_id}/approve?approved=true", timeout=10)
             approve_success = approve_response.status_code == 200
             
