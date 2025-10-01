@@ -1112,7 +1112,10 @@ async def delete_product_admin(product_id: str):
         if result.deleted_count == 0:
             raise HTTPException(status_code=404, detail="Product not found")
         return {"success": True, "deleted": True}
+    except HTTPException:
+        raise
     except Exception as e:
+        logger.error(f"Admin product delete error: {str(e)}")
         raise HTTPException(status_code=500, detail="Failed to delete product")
 
 # Include the router in the main app
