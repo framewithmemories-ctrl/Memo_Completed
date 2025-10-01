@@ -979,7 +979,7 @@ async def get_admin_stats():
         
         # Calculate total revenue
         orders = await db.orders.find({}).to_list(1000)
-        total_revenue = sum(order.get("total", 0) for order in orders)
+        total_revenue = sum(order.get("total_amount", 0) for order in orders)
         
         # Get recent orders (last 10)
         recent_orders = await db.orders.find({}).sort("created_at", -1).limit(10).to_list(10)
@@ -991,18 +991,17 @@ async def get_admin_stats():
             {"name": "Custom Photo Mug", "sales": 28, "revenue": 9772},
         ]
         
-        stats = AdminStats(
-            total_users=total_users,
-            total_orders=total_orders,
-            total_revenue=total_revenue,
-            pending_reviews=pending_reviews,
-            total_products=total_products,
-            recent_orders=[Order(**order) for order in recent_orders],
-            top_products=top_products
-        )
-        
-        return stats
+        return {
+            "total_users": total_users,
+            "total_orders": total_orders,
+            "total_revenue": total_revenue,
+            "pending_reviews": pending_reviews,
+            "total_products": total_products,
+            "recent_orders": [Order(**order) for order in recent_orders],
+            "top_products": top_products
+        }
     except Exception as e:
+        logger.error(f"Admin stats error: {str(e)}")
         raise HTTPException(status_code=500, detail="Failed to fetch admin statistics")
 
 @api_router.get("/admin/reviews")
