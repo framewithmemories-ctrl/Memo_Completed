@@ -43,6 +43,17 @@ import {
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
 const API = `${BACKEND_URL}/api`;
 
+// Build axios config with the admin JWT (overrides any user token set globally)
+const adminAuthConfig = (extra = {}) => {
+  let token = '';
+  try {
+    token = JSON.parse(localStorage.getItem('adminAuth') || '{}').token || '';
+  } catch (e) {
+    token = '';
+  }
+  return { ...extra, headers: { ...(extra.headers || {}), Authorization: `Bearer ${token}` } };
+};
+
 export const AdminPanel = () => {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [adminData, setAdminData] = useState(null);
@@ -121,41 +132,48 @@ export const AdminPanel = () => {
 
   const loadDashboardData = async () => {
     try {
-      const response = await axios.get(`${API}/admin/stats`);
+      const response = await axios.get(`${API}/admin/stats`, adminAuthConfig());
       setStats(response.data);
     } catch (error) {
-      console.error('Error loading dashboard data:', error);
-      toast.error('Failed to load dashboard data');
+      handleApiError(error, 'Failed to load dashboard data');
+    }
+  };
+
+  const handleApiError = (error, fallback) => {
+    const status = error.response?.status;
+    if (status === 401 || status === 403) {
+      toast.error('Your admin session expired. Please sign in again.');
+      handleLogout();
+    } else {
+      console.error(fallback, error);
+      toast.error(fallback);
     }
   };
 
   const loadReviews = async (status = 'all') => {
     try {
-      const response = await axios.get(`${API}/admin/reviews?status=${status}`);
+      const response = await axios.get(`${API}/admin/reviews?status=${status}`, adminAuthConfig());
       setReviews(response.data.reviews);
     } catch (error) {
-      console.error('Error loading reviews:', error);
-      toast.error('Failed to load reviews');
+      handleApiError(error, 'Failed to load reviews');
     }
   };
 
   const loadOrders = async (status = 'all') => {
     try {
-      const response = await axios.get(`${API}/admin/orders?status=${status}`);
+      const response = await axios.get(`${API}/admin/orders?status=${status}`, adminAuthConfig());
       setOrders(response.data.orders);
     } catch (error) {
-      console.error('Error loading orders:', error);
-      toast.error('Failed to load orders');
+      handleApiError(error, 'Failed to load orders');
     }
   };
 
   const loadUsers = async () => {
     try {
-      const response = await axios.get(`${API}/admin/users`);
+      const response = await axios.get(`${API}/admin/users`, adminAuthConfig());
       setUsers(response.data.users);
     } catch (error) {
-      console.error('Error loading users:', error);
-      toast.error('Failed to load users');
+      handleApiError(error, 'Failed to load users');
     }
   };
 
@@ -164,49 +182,53 @@ export const AdminPanel = () => {
       const response = await axios.get(`${API}/products`);
       setProducts(response.data);
     } catch (error) {
-      console.error('Error loading products:', error);
-      toast.error('Failed to load products');
+      handleApiError(error, 'Failed to load products');
     }
   };
 
   const approveReview = async (reviewId, approved) => {
     try {
-      await axios.put(`${API}/admin/reviews/${reviewId}/approve`, null, {
-        params: { approved }
-      });
+      await axios.put(`${API}/admin/reviews/${reviewId}/approve`, null, adminAuthConfig({ params: { approved } }));
       toast.success(approved ? 'Review approved!' : 'Review rejected!');
       loadReviews();
     } catch (error) {
-      console.error('Error updating review:', error);
-      toast.error('Failed to update review');
+      handleApiError(error, 'Failed to update review');
     }
   };
 
   const deleteReview = async (reviewId) => {
     if (window.confirm('Are you sure you want to delete this review?')) {
       try {
-        await axios.delete(`${API}/admin/reviews/${reviewId}`);
+        await axios.delete(`${API}/admin/reviews/${reviewId}`, adminAuthConfig());
         toast.success('Review deleted!');
         loadReviews();
         loadDashboardData(); // Refresh stats
       } catch (error) {
-        console.error('Error deleting review:', error);
-        toast.error('Failed to delete review');
+        handleApiError(error, 'Failed to delete review');
       }
     }
   };
 
   const updateOrderStatus = async (orderId, newStatus) => {
     try {
-      await axios.put(`${API}/admin/orders/${orderId}/status`, null, {
-        params: { status: newStatus }
-      });
+      await axios.put(`${API}/admin/orders/${orderId}/status`, null, adminAuthConfig({ params: { status: newStatus } }));
       toast.success(`Order status updated to ${newStatus}!`);
       loadOrders();
       loadDashboardData(); // Refresh stats
     } catch (error) {
-      console.error('Error updating order:', error);
-      toast.error('Failed to update order status');
+      handleApiError(error, 'Failed to update order status');
+    }
+  };
+
+  const deleteProduct = async (productId) => {
+    if (window.confirm('Delete this product? This cannot be undone.')) {
+      try {
+        await axios.delete(`${API}/admin/products/${productId}`, adminAuthConfig());
+        toast.success('Product deleted!');
+        loadProducts();
+      } catch (error) {
+        handleApiError(error, 'Failed to delete product');
+      }
     }
   };
 
@@ -635,10 +657,10 @@ export const AdminPanel = () => {
                         <div className="flex items-center justify-between">
                           <span className="font-bold text-lg">₹{product.base_price}</span>
                           <div className="flex space-x-1">
-                            <Button size="sm" variant="outline">
+                            <Button size="sm" variant="outline" disabled title="Coming soon">
                               <Edit className="w-4 h-4" />
                             </Button>
-                            <Button size="sm" variant="destructive">
+                            <Button size="sm" variant="destructive" onClick={() => deleteProduct(product.id)} data-testid={`delete-product-${product.id}`}>
                               <Trash2 className="w-4 h-4" />
                             </Button>
                           </div>
@@ -740,7 +762,7 @@ export const AdminPanel = () => {
                     <Download className="w-4 h-4 mr-2" />
                     Export Users
                   </Button>
-                  <Button variant="outline" className="w-full justify-start">
+                  <Button variant="outline" className="w-full justify-start" onClick={() => { window.location.href = '/'; }} data-testid="back-to-website-button">
                     <Home className="w-4 h-4 mr-2" />
                     Back to Website
                   </Button>

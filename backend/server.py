@@ -8,7 +8,10 @@ from pathlib import Path
 from pydantic import BaseModel, Field
 from typing import List, Optional
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
+import jwt as pyjwt
+import bcrypt
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 import json
 from emergentintegrations.llm.chat import LlmChat, UserMessage
 import base64
@@ -119,6 +122,7 @@ class User(BaseModel):
     wallet_balance: float = 0.0
     store_credits: float = 0.0
     total_spent: float = 0.0
+    role: str = "user"
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 class UserCreate(BaseModel):
@@ -947,28 +951,145 @@ async def pay_with_wallet(user_id: str, amount: float, order_id: str):
         "transaction_id": transaction.id
     }
 
+# ============================ Authentication ============================
+JWT_SECRET = os.environ["JWT_SECRET"]
+JWT_ALG = "HS256"
+security = HTTPBearer(auto_error=False)
+
+
+def hash_password(pw: str) -> str:
+    return bcrypt.hashpw(pw.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
+
+
+def verify_password(pw: str, hashed: str) -> bool:
+    try:
+        return bcrypt.checkpw(pw.encode("utf-8"), hashed.encode("utf-8"))
+    except Exception:
+        return False
+
+
+def create_token(sub: str, role: str, extra: dict = None) -> str:
+    payload = {
+        "sub": sub,
+        "role": role,
+        "exp": datetime.now(timezone.utc) + timedelta(days=7),
+    }
+    if extra:
+        payload.update(extra)
+    return pyjwt.encode(payload, JWT_SECRET, algorithm=JWT_ALG)
+
+
+def decode_token(token: str) -> dict:
+    try:
+        return pyjwt.decode(token, JWT_SECRET, algorithms=[JWT_ALG])
+    except pyjwt.ExpiredSignatureError:
+        raise HTTPException(status_code=401, detail="Session expired. Please log in again.")
+    except pyjwt.InvalidTokenError:
+        raise HTTPException(status_code=401, detail="Invalid authentication token")
+
+
+async def get_current_user(creds: HTTPAuthorizationCredentials = Depends(security)) -> dict:
+    if not creds:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    payload = decode_token(creds.credentials)
+    if payload.get("role") != "user":
+        raise HTTPException(status_code=401, detail="Invalid authentication token")
+    user = await db.users.find_one({"id": payload["sub"]})
+    if not user:
+        raise HTTPException(status_code=401, detail="User not found")
+    return user
+
+
+async def require_admin(creds: HTTPAuthorizationCredentials = Depends(security)) -> dict:
+    if not creds:
+        raise HTTPException(status_code=401, detail="Admin authentication required")
+    payload = decode_token(creds.credentials)
+    if payload.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required")
+    return payload
+
+
+class RegisterRequest(BaseModel):
+    name: str
+    email: str
+    password: str
+    phone: Optional[str] = None
+
+
+class LoginRequest(BaseModel):
+    email: str
+    password: str
+
+
+@api_router.post("/auth/register")
+async def register(req: RegisterRequest):
+    if len(req.password) < 6:
+        raise HTTPException(status_code=400, detail="Password must be at least 6 characters")
+    email = req.email.strip().lower()
+    existing = await db.users.find_one({"email": email})
+    if existing:
+        raise HTTPException(status_code=400, detail="An account with this email already exists")
+    user_obj = User(name=req.name.strip(), email=email, phone=req.phone, role="user")
+    doc = user_obj.dict()
+    doc["password_hash"] = hash_password(req.password)
+    await db.users.insert_one(doc)
+    token = create_token(user_obj.id, "user")
+    return {"token": token, "user": user_obj.dict()}
+
+
+@api_router.post("/auth/login")
+async def login(req: LoginRequest):
+    email = req.email.strip().lower()
+    user = await db.users.find_one({"email": email})
+    if not user or not user.get("password_hash") or not verify_password(req.password, user["password_hash"]):
+        raise HTTPException(status_code=401, detail="Invalid email or password")
+    token = create_token(user["id"], "user")
+    return {"token": token, "user": User(**user).dict()}
+
+
+@api_router.get("/auth/me")
+async def auth_me(current=Depends(get_current_user)):
+    return {"user": User(**current).dict()}
+
+
+async def enrich_orders(orders: List[dict]) -> List[dict]:
+    user_ids = list({o.get("user_id") for o in orders if o.get("user_id")})
+    users = await db.users.find({"id": {"$in": user_ids}}).to_list(1000) if user_ids else []
+    name_map = {u["id"]: u.get("name", "Guest") for u in users}
+    email_map = {u["id"]: u.get("email", "") for u in users}
+    result = []
+    for o in orders:
+        oo = Order(**o).dict()
+        oo["total"] = oo.get("total_amount", 0)
+        oo["customer"] = {
+            "name": name_map.get(o.get("user_id"), "Guest"),
+            "email": email_map.get(o.get("user_id"), ""),
+        }
+        result.append(oo)
+    return result
+
+
 # Admin Management Endpoints
 @api_router.post("/admin/login")
 async def admin_login(credentials: AdminLogin):
-    """Admin login (simplified - in production, use proper authentication)"""
-    # For demo purposes, hardcoded admin credentials
-    # In production, use proper password hashing and JWT tokens
-    if credentials.username == "admin" and credentials.password == "memories2024":
-        admin_data = {
-            "id": "admin_001",
-            "username": "admin",
-            "email": "admin@memories.com",
-            "role": "super_admin",
-            "permissions": ["products", "reviews", "users", "orders", "analytics"],
-            "created_at": datetime.now(timezone.utc).isoformat(),
-            "last_login": datetime.now(timezone.utc).isoformat()
-        }
-        return {"success": True, "admin": admin_data, "token": "demo_admin_token"}
-    else:
+    """Admin login - verifies against seeded admin with bcrypt-hashed password, returns JWT."""
+    admin = await db.admins.find_one({"username": credentials.username.strip()})
+    if not admin or not verify_password(credentials.password, admin.get("password_hash", "")):
         raise HTTPException(status_code=401, detail="Invalid credentials")
+    token = create_token(admin["username"], "admin")
+    admin_data = {
+        "id": admin.get("id", "admin_001"),
+        "username": admin["username"],
+        "email": admin.get("email", "admin@memories.com"),
+        "role": admin.get("role", "super_admin"),
+        "permissions": ["products", "reviews", "users", "orders", "analytics"],
+        "last_login": datetime.now(timezone.utc).isoformat(),
+    }
+    return {"success": True, "admin": admin_data, "token": token}
+
 
 @api_router.get("/admin/stats")
-async def get_admin_stats():
+async def get_admin_stats(admin=Depends(require_admin)):
     """Get comprehensive admin dashboard statistics"""
     try:
         # Get counts from database
@@ -982,7 +1103,8 @@ async def get_admin_stats():
         total_revenue = sum(order.get("total_amount", 0) for order in orders)
         
         # Get recent orders (last 10)
-        recent_orders = await db.orders.find({}).sort("created_at", -1).limit(10).to_list(10)
+        recent_orders_docs = await db.orders.find({}).sort("created_at", -1).limit(10).to_list(10)
+        recent_orders = await enrich_orders(recent_orders_docs)
         
         # Get top products (simplified)
         top_products = [
@@ -997,7 +1119,7 @@ async def get_admin_stats():
             "total_revenue": total_revenue,
             "pending_reviews": pending_reviews,
             "total_products": total_products,
-            "recent_orders": [Order(**order) for order in recent_orders],
+            "recent_orders": recent_orders,
             "top_products": top_products
         }
     except Exception as e:
@@ -1020,7 +1142,7 @@ async def get_admin_reviews(status: str = "all", limit: int = 50):
         raise HTTPException(status_code=500, detail="Failed to fetch reviews")
 
 @api_router.put("/admin/reviews/{review_id}/approve")
-async def approve_review(review_id: str, approved: bool):
+async def approve_review(review_id: str, approved: bool, admin=Depends(require_admin)):
     """Approve or reject a review"""
     try:
         result = await db.reviews.update_one(
@@ -1037,7 +1159,7 @@ async def approve_review(review_id: str, approved: bool):
         raise HTTPException(status_code=500, detail="Failed to update review")
 
 @api_router.delete("/admin/reviews/{review_id}")
-async def delete_review(review_id: str):
+async def delete_review(review_id: str, admin=Depends(require_admin)):
     """Delete a review"""
     try:
         result = await db.reviews.delete_one({"id": review_id})
@@ -1048,7 +1170,7 @@ async def delete_review(review_id: str):
         raise HTTPException(status_code=500, detail="Failed to delete review")
 
 @api_router.get("/admin/orders")
-async def get_admin_orders(status: str = "all", limit: int = 100):
+async def get_admin_orders(status: str = "all", limit: int = 100, admin=Depends(require_admin)):
     """Get orders for admin management"""
     try:
         filter_query = {}
@@ -1056,12 +1178,12 @@ async def get_admin_orders(status: str = "all", limit: int = 100):
             filter_query["status"] = status
         
         orders = await db.orders.find(filter_query).sort("created_at", -1).limit(limit).to_list(limit)
-        return {"orders": [Order(**order) for order in orders]}
+        return {"orders": await enrich_orders(orders)}
     except Exception as e:
         raise HTTPException(status_code=500, detail="Failed to fetch orders")
 
 @api_router.put("/admin/orders/{order_id}/status")
-async def update_order_status(order_id: str, status: str):
+async def update_order_status(order_id: str, status: str, admin=Depends(require_admin)):
     """Update order status"""
     valid_statuses = ["pending", "processing", "completed", "cancelled", "refunded"]
     if status not in valid_statuses:
@@ -1082,7 +1204,7 @@ async def update_order_status(order_id: str, status: str):
         raise HTTPException(status_code=500, detail="Failed to update order status")
 
 @api_router.get("/admin/users")
-async def get_admin_users(limit: int = 100):
+async def get_admin_users(limit: int = 100, admin=Depends(require_admin)):
     """Get users for admin management"""
     try:
         users = await db.users.find({}).sort("created_at", -1).limit(limit).to_list(limit)
@@ -1091,7 +1213,7 @@ async def get_admin_users(limit: int = 100):
         raise HTTPException(status_code=500, detail="Failed to fetch users")
 
 @api_router.put("/admin/products/{product_id}")
-async def update_product_admin(product_id: str, product_update: dict):
+async def update_product_admin(product_id: str, product_update: dict, admin=Depends(require_admin)):
     """Update product (admin only)"""
     try:
         result = await db.products.update_one(
@@ -1105,7 +1227,7 @@ async def update_product_admin(product_id: str, product_update: dict):
         raise HTTPException(status_code=500, detail="Failed to update product")
 
 @api_router.delete("/admin/products/{product_id}")
-async def delete_product_admin(product_id: str):
+async def delete_product_admin(product_id: str, admin=Depends(require_admin)):
     """Delete product (admin only)"""
     try:
         result = await db.products.delete_one({"id": product_id})
@@ -1135,6 +1257,33 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+@app.on_event("startup")
+async def startup_seed_admin():
+    """Seed the admin account (bcrypt-hashed) from env on startup."""
+    try:
+        username = os.environ.get("ADMIN_USERNAME", "admin")
+        password = os.environ.get("ADMIN_PASSWORD", "memories2024")
+        existing = await db.admins.find_one({"username": username})
+        if not existing:
+            await db.admins.insert_one({
+                "id": "admin_001",
+                "username": username,
+                "email": "admin@memories.com",
+                "password_hash": hash_password(password),
+                "role": "super_admin",
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            })
+            logger.info(f"Seeded admin account: {username}")
+        elif not verify_password(password, existing.get("password_hash", "")):
+            await db.admins.update_one(
+                {"username": username},
+                {"$set": {"password_hash": hash_password(password)}},
+            )
+            logger.info(f"Updated admin password for: {username}")
+    except Exception as e:
+        logger.error(f"Admin seed error: {e}")
+
 
 @app.on_event("shutdown")
 async def shutdown_db_client():

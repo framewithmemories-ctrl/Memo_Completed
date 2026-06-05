@@ -15,7 +15,8 @@ import { toast } from "sonner";
 import { Toaster } from "./components/ui/sonner";
 import { CartProvider, useCart } from "./context/CartContext";
 import { SearchComponent } from "./components/SearchComponent";
-import { UserProfileSimple } from "./components/UserProfileSimple";
+import { AuthProvider } from "./context/AuthContext";
+import { AccountButton } from "./components/AccountButton";
 import { EnhancedAIGiftFinder } from "./components/EnhancedAIGiftFinder";
 import { HeroSection, AboutUsSection, ProductGrid } from "./components/MainComponents";
 import { AboutUsPage } from "./components/AboutUsPage";
@@ -281,27 +282,7 @@ const Header = () => {
               Free Gift Wrap
             </Badge>
             
-            <button 
-              className="p-2 hover:bg-gray-100 rounded-lg transition-colors relative group"
-              onClick={() => {
-                // Load and execute the external profile modal script
-                if (!window.openProfileModal) {
-                  const script = document.createElement('script');
-                  script.src = '/profile-modal.js';
-                  script.onload = () => {
-                    window.openProfileModal();
-                  };
-                  document.head.appendChild(script);
-                } else {
-                  window.openProfileModal();
-                }
-              }}
-            >
-              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
-              </svg>
-              <div className="absolute -top-1 -right-1 w-3 h-3 bg-green-500 rounded-full border border-white opacity-0 group-hover:opacity-100 transition-opacity"></div>
-            </button>
+            <AccountButton />
             <CartIcon />
             
             <SmartCallButton className="bg-gradient-to-r from-rose-500 to-pink-500 hover:from-rose-600 hover:to-pink-600 text-white hidden sm:flex">
@@ -1123,17 +1104,19 @@ const Home = () => {
 
 function App() {
   return (
-    <CartProvider>
-      <div className="App">
-        <BrowserRouter>
-          <Routes>
-            <Route path="/" element={<Home />} />
-            <Route path="/about" element={<AboutUsPage />} />
-            <Route path="/admin" element={<AdminPanel />} />
-          </Routes>
-        </BrowserRouter>
-      </div>
-    </CartProvider>
+    <AuthProvider>
+      <CartProvider>
+        <div className="App">
+          <BrowserRouter>
+            <Routes>
+              <Route path="/" element={<Home />} />
+              <Route path="/about" element={<AboutUsPage />} />
+              <Route path="/admin" element={<AdminPanel />} />
+            </Routes>
+          </BrowserRouter>
+        </div>
+      </CartProvider>
+    </AuthProvider>
   );
 }
 

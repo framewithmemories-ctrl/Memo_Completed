@@ -370,6 +370,42 @@ frontend:
         agent: "main"
         comment: "✅ BRANDING CONSISTENCY COMPLETELY VERIFIED: (1) Header - BusinessLogo and BusinessName properly aligned with responsive sizing and spacing. (2) Footer - BusinessLogo (w-12 h-12) and BusinessName positioned in same row with proper spacing. (3) About Us Page - Both header section and Our Promise section have BusinessLogo and BusinessName in same row alignment (flex items-center justify-center space-x-4). (4) Loading Screen - BusinessLogo (w-24 h-24) displayed during app initialization. (5) All static content maintains consistent branding placement and typography. Logo and name visibility confirmed across all pages with correct spacing and responsive behavior. Comprehensive branding consistency achieved!"
 
+  - task: "JWT Authentication (User + Admin)"
+    implemented: true
+    working: "NA"
+    file: "/app/backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: "Added JWT auth (bcrypt hashing, PyJWT). New endpoints: POST /api/auth/register, POST /api/auth/login, GET /api/auth/me. Admin login verifies against bcrypt-hashed seeded admin in 'admins' collection and returns JWT (role=admin). All /api/admin/* protected with require_admin (401 without token, 403 for user token). Admin seeded on startup from env (admin/memories2024). Admin orders/stats enriched with customer name + total. Verified via curl."
+
+  - task: "User Account / Login + Personal Page (Profile, Photos, Wallet, Orders)"
+    implemented: true
+    working: "NA"
+    file: "/app/frontend/src/components/AccountButton.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: "Replaced broken stub (UserProfileSimple alert + external /profile-modal.js) with real React AccountButton + AuthContext (JWT in localStorage, axios header, session restore via /auth/me). Header account-button opens dialog: logged out -> Login/Sign Up tabs; logged in -> Profile/Photos/Wallet/Orders tabs using authenticated backend user id. Orders tab fetches /api/orders/{user_id}. Smoke tested OK."
+
+  - task: "Admin Panel Frontend E2E (JWT-secured)"
+    implemented: true
+    working: "NA"
+    file: "/app/frontend/src/components/AdminPanel.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: "AdminPanel sends Authorization: Bearer <admin JWT> on all admin calls (adminAuthConfig), handles 401/403 by logout. Fixed blank order totals (backend returns total + customer). Wired product delete + Back to Website."
+
 metadata:
   created_by: "main_agent"
   version: "1.0"
