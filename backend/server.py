@@ -33,6 +33,79 @@ app = FastAPI()
 # Create a router with the /api prefix
 api_router = APIRouter(prefix="/api")
 
+# ============================ Auth helpers (defined early so routes can use them) ============================
+JWT_SECRET = os.environ["JWT_SECRET"]
+JWT_ALG = "HS256"
+security = HTTPBearer(auto_error=False)
+
+
+def hash_password(pw: str) -> str:
+    return bcrypt.hashpw(pw.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
+
+
+def verify_password(pw: str, hashed: str) -> bool:
+    try:
+        return bcrypt.checkpw(pw.encode("utf-8"), hashed.encode("utf-8"))
+    except Exception:
+        return False
+
+
+def create_token(sub: str, role: str, extra: dict = None) -> str:
+    payload = {
+        "sub": sub,
+        "role": role,
+        "exp": datetime.now(timezone.utc) + timedelta(days=7),
+    }
+    if extra:
+        payload.update(extra)
+    return pyjwt.encode(payload, JWT_SECRET, algorithm=JWT_ALG)
+
+
+def decode_token(token: str) -> dict:
+    try:
+        return pyjwt.decode(token, JWT_SECRET, algorithms=[JWT_ALG])
+    except pyjwt.ExpiredSignatureError:
+        raise HTTPException(status_code=401, detail="Session expired. Please log in again.")
+    except pyjwt.InvalidTokenError:
+        raise HTTPException(status_code=401, detail="Invalid authentication token")
+
+
+async def get_current_user(creds: HTTPAuthorizationCredentials = Depends(security)) -> dict:
+    if not creds:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    payload = decode_token(creds.credentials)
+    if payload.get("role") != "user":
+        raise HTTPException(status_code=401, detail="Invalid authentication token")
+    user = await db.users.find_one({"id": payload["sub"]})
+    if not user:
+        raise HTTPException(status_code=401, detail="User not found")
+    user.pop("_id", None)
+    return user
+
+
+async def require_admin(creds: HTTPAuthorizationCredentials = Depends(security)) -> dict:
+    if not creds:
+        raise HTTPException(status_code=401, detail="Admin authentication required")
+    payload = decode_token(creds.credentials)
+    if payload.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required")
+    return payload
+
+
+async def verify_user_access(user_id: str, creds: HTTPAuthorizationCredentials = Depends(security)) -> dict:
+    """Ensure the caller is the owner of user_id (used to protect wallet/photo routes)."""
+    if not creds:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    payload = decode_token(creds.credentials)
+    if payload.get("role") != "user" or payload.get("sub") != user_id:
+        raise HTTPException(status_code=403, detail="Not authorized for this account")
+    user = await db.users.find_one({"id": user_id})
+    if not user:
+        raise HTTPException(status_code=401, detail="User not found")
+    user.pop("_id", None)
+    return user
+
+
 # Models
 class Admin(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
@@ -431,7 +504,7 @@ async def upload_image(file: UploadFile = File(...)):
             "message": message,
             "recommended_sizes": ["8x10", "12x16"] if quality_warning else ["8x10", "12x16", "16x20", "20x24"]
         }
-    except Exception as e:
+    except Exception:
         raise HTTPException(status_code=400, detail="Invalid image file. Please upload JPG, PNG, or HEIC format.")
 
 @api_router.post("/gift-suggestions")
@@ -537,7 +610,7 @@ async def get_gift_suggestions(request: EnhancedGiftRequest):
             }
         }
         
-    except Exception as e:
+    except Exception:
         # Enhanced fallback suggestions based on quiz data
         fallback_suggestions = f"""Based on your preferences for {quiz_data.recipient} on {quiz_data.occasion}:
 
@@ -569,7 +642,7 @@ async def get_gift_suggestions(request: EnhancedGiftRequest):
    - Perfect aspect ratio match
    - **Why AI chose this:** Your photo analysis shows {photo_data.get('analysis', 'great potential')} - ideal for framing"""
 
-        fallback_suggestions += f"""
+        fallback_suggestions += """
 
 📍 **Visit Us:** 19B Kani Illam, Keeranatham Road, Coimbatore
 📞 **Call:** +91 81480 40148
@@ -628,7 +701,7 @@ async def create_review(review: ReviewCreate):
         
         await db.reviews.insert_one(review_obj.dict())
         return review_obj
-    except Exception as e:
+    except Exception:
         raise HTTPException(status_code=500, detail="Failed to create review")
 
 @api_router.get("/reviews")
@@ -673,7 +746,7 @@ async def get_reviews(
             "has_more": (offset + limit) < total_count,
             "rating_stats": rating_stats
         }
-    except Exception as e:
+    except Exception:
         raise HTTPException(status_code=500, detail="Failed to fetch reviews")
 
 @api_router.get("/reviews/stats")
@@ -702,7 +775,7 @@ async def get_review_stats():
                 "1": len([r for r in all_reviews if r["rating"] == 1]),
             }
         }
-    except Exception as e:
+    except Exception:
         raise HTTPException(status_code=500, detail="Failed to fetch review statistics")
 
 @api_router.get("/store-info")
@@ -764,25 +837,25 @@ async def update_user(user_id: str, user_data: dict):
 
 # Photo Storage Endpoints
 @api_router.post("/users/{user_id}/photos", response_model=SavedPhoto)
-async def save_user_photo(user_id: str, photo: SavedPhotoCreate):
+async def save_user_photo(user_id: str, photo: SavedPhotoCreate, owner=Depends(verify_user_access)):
     photo_obj = SavedPhoto(**photo.dict())
     await db.user_photos.insert_one(photo_obj.dict())
     return photo_obj
 
 @api_router.get("/users/{user_id}/photos")
-async def get_user_photos(user_id: str):
+async def get_user_photos(user_id: str, owner=Depends(verify_user_access)):
     photos = await db.user_photos.find({"user_id": user_id}).to_list(100)
     return [SavedPhoto(**photo) for photo in photos]
 
 @api_router.delete("/users/{user_id}/photos/{photo_id}")
-async def delete_user_photo(user_id: str, photo_id: str):
+async def delete_user_photo(user_id: str, photo_id: str, owner=Depends(verify_user_access)):
     result = await db.user_photos.delete_one({"id": photo_id, "user_id": user_id})
     if result.deleted_count == 0:
         raise HTTPException(status_code=404, detail="Photo not found")
     return {"message": "Photo deleted successfully"}
 
 @api_router.put("/users/{user_id}/photos/{photo_id}/favorite")
-async def toggle_photo_favorite(user_id: str, photo_id: str):
+async def toggle_photo_favorite(user_id: str, photo_id: str, owner=Depends(verify_user_access)):
     photo = await db.user_photos.find_one({"id": photo_id, "user_id": user_id})
     if not photo:
         raise HTTPException(status_code=404, detail="Photo not found")
@@ -795,7 +868,7 @@ async def toggle_photo_favorite(user_id: str, photo_id: str):
     return {"favorite": new_favorite_status}
 
 @api_router.put("/users/{user_id}/photos/{photo_id}/use")
-async def use_photo_for_order(user_id: str, photo_id: str):
+async def use_photo_for_order(user_id: str, photo_id: str, owner=Depends(verify_user_access)):
     await db.user_photos.update_one(
         {"id": photo_id, "user_id": user_id},
         {
@@ -807,7 +880,7 @@ async def use_photo_for_order(user_id: str, photo_id: str):
 
 # Wallet Endpoints
 @api_router.get("/users/{user_id}/wallet")
-async def get_user_wallet(user_id: str):
+async def get_user_wallet(user_id: str, owner=Depends(verify_user_access)):
     user = await db.users.find_one({"id": user_id})
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
@@ -821,7 +894,7 @@ async def get_user_wallet(user_id: str):
     }
 
 @api_router.post("/users/{user_id}/wallet/add-money")
-async def add_money_to_wallet(user_id: str, amount: float):
+async def add_money_to_wallet(user_id: str, amount: float, owner=Depends(verify_user_access)):
     user = await db.users.find_one({"id": user_id})
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
@@ -848,7 +921,7 @@ async def add_money_to_wallet(user_id: str, amount: float):
     return {"new_balance": new_balance, "transaction_id": transaction.id}
 
 @api_router.post("/users/{user_id}/wallet/convert-points")
-async def convert_points_to_credits(user_id: str, points: int):
+async def convert_points_to_credits(user_id: str, points: int, owner=Depends(verify_user_access)):
     user = await db.users.find_one({"id": user_id})
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
@@ -893,7 +966,7 @@ async def convert_points_to_credits(user_id: str, points: int):
     }
 
 @api_router.get("/users/{user_id}/wallet/transactions")
-async def get_wallet_transactions(user_id: str, limit: int = 50):
+async def get_wallet_transactions(user_id: str, limit: int = 50, owner=Depends(verify_user_access)):
     transactions = await db.wallet_transactions.find(
         {"user_id": user_id}
     ).sort("created_at", -1).to_list(limit)
@@ -901,7 +974,7 @@ async def get_wallet_transactions(user_id: str, limit: int = 50):
     return [WalletTransaction(**txn) for txn in transactions]
 
 @api_router.post("/users/{user_id}/wallet/pay")
-async def pay_with_wallet(user_id: str, amount: float, order_id: str):
+async def pay_with_wallet(user_id: str, amount: float, order_id: str, owner=Depends(verify_user_access)):
     user = await db.users.find_one({"id": user_id})
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
@@ -951,64 +1024,7 @@ async def pay_with_wallet(user_id: str, amount: float, order_id: str):
         "transaction_id": transaction.id
     }
 
-# ============================ Authentication ============================
-JWT_SECRET = os.environ["JWT_SECRET"]
-JWT_ALG = "HS256"
-security = HTTPBearer(auto_error=False)
-
-
-def hash_password(pw: str) -> str:
-    return bcrypt.hashpw(pw.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
-
-
-def verify_password(pw: str, hashed: str) -> bool:
-    try:
-        return bcrypt.checkpw(pw.encode("utf-8"), hashed.encode("utf-8"))
-    except Exception:
-        return False
-
-
-def create_token(sub: str, role: str, extra: dict = None) -> str:
-    payload = {
-        "sub": sub,
-        "role": role,
-        "exp": datetime.now(timezone.utc) + timedelta(days=7),
-    }
-    if extra:
-        payload.update(extra)
-    return pyjwt.encode(payload, JWT_SECRET, algorithm=JWT_ALG)
-
-
-def decode_token(token: str) -> dict:
-    try:
-        return pyjwt.decode(token, JWT_SECRET, algorithms=[JWT_ALG])
-    except pyjwt.ExpiredSignatureError:
-        raise HTTPException(status_code=401, detail="Session expired. Please log in again.")
-    except pyjwt.InvalidTokenError:
-        raise HTTPException(status_code=401, detail="Invalid authentication token")
-
-
-async def get_current_user(creds: HTTPAuthorizationCredentials = Depends(security)) -> dict:
-    if not creds:
-        raise HTTPException(status_code=401, detail="Not authenticated")
-    payload = decode_token(creds.credentials)
-    if payload.get("role") != "user":
-        raise HTTPException(status_code=401, detail="Invalid authentication token")
-    user = await db.users.find_one({"id": payload["sub"]})
-    if not user:
-        raise HTTPException(status_code=401, detail="User not found")
-    return user
-
-
-async def require_admin(creds: HTTPAuthorizationCredentials = Depends(security)) -> dict:
-    if not creds:
-        raise HTTPException(status_code=401, detail="Admin authentication required")
-    payload = decode_token(creds.credentials)
-    if payload.get("role") != "admin":
-        raise HTTPException(status_code=403, detail="Admin access required")
-    return payload
-
-
+# ============================ Authentication endpoints ============================
 class RegisterRequest(BaseModel):
     name: str
     email: str
@@ -1138,7 +1154,7 @@ async def get_admin_reviews(status: str = "all", limit: int = 50, admin=Depends(
         
         reviews = await db.reviews.find(filter_query).sort("created_at", -1).limit(limit).to_list(limit)
         return {"reviews": [Review(**review) for review in reviews]}
-    except Exception as e:
+    except Exception:
         raise HTTPException(status_code=500, detail="Failed to fetch reviews")
 
 @api_router.put("/admin/reviews/{review_id}/approve")
@@ -1166,7 +1182,7 @@ async def delete_review(review_id: str, admin=Depends(require_admin)):
         if result.deleted_count == 0:
             raise HTTPException(status_code=404, detail="Review not found")
         return {"success": True, "deleted": True}
-    except Exception as e:
+    except Exception:
         raise HTTPException(status_code=500, detail="Failed to delete review")
 
 @api_router.get("/admin/orders")
@@ -1179,7 +1195,7 @@ async def get_admin_orders(status: str = "all", limit: int = 100, admin=Depends(
         
         orders = await db.orders.find(filter_query).sort("created_at", -1).limit(limit).to_list(limit)
         return {"orders": await enrich_orders(orders)}
-    except Exception as e:
+    except Exception:
         raise HTTPException(status_code=500, detail="Failed to fetch orders")
 
 @api_router.put("/admin/orders/{order_id}/status")
@@ -1209,21 +1225,67 @@ async def get_admin_users(limit: int = 100, admin=Depends(require_admin)):
     try:
         users = await db.users.find({}).sort("created_at", -1).limit(limit).to_list(limit)
         return {"users": [User(**user) for user in users]}
-    except Exception as e:
+    except Exception:
         raise HTTPException(status_code=500, detail="Failed to fetch users")
+
+class WalletAdjustRequest(BaseModel):
+    amount: float
+    type: str  # 'credit' or 'debit'
+    reason: str
+
+
+@api_router.post("/admin/users/{user_id}/wallet/adjust")
+async def admin_adjust_wallet(user_id: str, req: WalletAdjustRequest, admin=Depends(require_admin)):
+    """Admin manually credits or deducts a user's wallet. Reason is mandatory (audit trail)."""
+    if req.type not in ("credit", "debit"):
+        raise HTTPException(status_code=400, detail="type must be 'credit' or 'debit'")
+    if req.amount <= 0:
+        raise HTTPException(status_code=400, detail="amount must be greater than 0")
+    if not req.reason or not req.reason.strip():
+        raise HTTPException(status_code=400, detail="A reason/note is required for every adjustment")
+    user = await db.users.find_one({"id": user_id})
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    current_balance = user.get("wallet_balance", 0.0)
+    if req.type == "debit" and req.amount > current_balance:
+        raise HTTPException(status_code=400, detail="Cannot deduct more than the current balance")
+    new_balance = current_balance + req.amount if req.type == "credit" else current_balance - req.amount
+    await db.users.update_one({"id": user_id}, {"$set": {"wallet_balance": new_balance}})
+    transaction = WalletTransaction(
+        user_id=user_id,
+        type=req.type,
+        amount=req.amount,
+        description=f"Admin {req.type}: {req.reason.strip()}",
+        category="admin_adjustment",
+        balance_after=new_balance,
+    )
+    await db.wallet_transactions.insert_one(transaction.dict())
+    return {"success": True, "new_balance": new_balance, "transaction_id": transaction.id}
+
+
+@api_router.post("/admin/products", response_model=Product)
+async def create_product_admin(product: ProductCreate, admin=Depends(require_admin)):
+    """Create a new product (admin only)."""
+    product_obj = Product(**product.dict())
+    await db.products.insert_one(product_obj.dict())
+    return product_obj
+
 
 @api_router.put("/admin/products/{product_id}")
 async def update_product_admin(product_id: str, product_update: dict, admin=Depends(require_admin)):
     """Update product (admin only)"""
     try:
+        product_update.pop("id", None)
         result = await db.products.update_one(
             {"id": product_id},
             {"$set": product_update}
         )
-        if result.modified_count == 0:
+        if result.matched_count == 0:
             raise HTTPException(status_code=404, detail="Product not found")
         return {"success": True, "updated": True}
-    except Exception as e:
+    except HTTPException:
+        raise
+    except Exception:
         raise HTTPException(status_code=500, detail="Failed to update product")
 
 @api_router.delete("/admin/products/{product_id}")

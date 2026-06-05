@@ -36,6 +36,7 @@ import {
   Settings,
   LogOut,
   Home,
+  Wallet,
   Lock,
   Unlock
 } from "lucide-react";
@@ -82,6 +83,14 @@ export const AdminPanel = () => {
     username: '',
     password: ''
   });
+
+  // Wallet adjust dialog
+  const [walletUser, setWalletUser] = useState(null);
+  const [walletForm, setWalletForm] = useState({ amount: '', type: 'credit', reason: '' });
+
+  // Product create/edit dialog
+  const [productDialog, setProductDialog] = useState({ open: false, mode: 'create', id: null });
+  const [productForm, setProductForm] = useState({ name: '', description: '', category: 'frames', base_price: '', image_url: '' });
 
   // Check if already authenticated on load
   useEffect(() => {
@@ -229,6 +238,61 @@ export const AdminPanel = () => {
       } catch (error) {
         handleApiError(error, 'Failed to delete product');
       }
+    }
+  };
+
+  const submitWalletAdjust = async () => {
+    const amount = parseFloat(walletForm.amount);
+    if (!amount || amount <= 0) { toast.error('Enter a valid amount'); return; }
+    if (!walletForm.reason.trim()) { toast.error('A reason/note is required'); return; }
+    try {
+      await axios.post(`${API}/admin/users/${walletUser.id}/wallet/adjust`, {
+        amount, type: walletForm.type, reason: walletForm.reason.trim(),
+      }, adminAuthConfig());
+      toast.success(`Wallet ${walletForm.type}ed by ₹${amount}`);
+      setWalletUser(null);
+      setWalletForm({ amount: '', type: 'credit', reason: '' });
+      loadUsers();
+    } catch (error) {
+      handleApiError(error, 'Failed to adjust wallet');
+    }
+  };
+
+  const openCreateProduct = () => {
+    setProductForm({ name: '', description: '', category: 'frames', base_price: '', image_url: '' });
+    setProductDialog({ open: true, mode: 'create', id: null });
+  };
+
+  const openEditProduct = (product) => {
+    setProductForm({
+      name: product.name || '', description: product.description || '',
+      category: product.category || 'frames', base_price: String(product.base_price || ''),
+      image_url: product.image_url || '',
+    });
+    setProductDialog({ open: true, mode: 'edit', id: product.id });
+  };
+
+  const submitProduct = async () => {
+    if (!productForm.name.trim() || !productForm.base_price) { toast.error('Name and price are required'); return; }
+    const payload = {
+      name: productForm.name.trim(),
+      description: productForm.description.trim(),
+      category: productForm.category,
+      base_price: parseFloat(productForm.base_price),
+      image_url: productForm.image_url.trim() || 'https://images.unsplash.com/photo-1513519245088-0e12902e35ca',
+    };
+    try {
+      if (productDialog.mode === 'create') {
+        await axios.post(`${API}/admin/products`, { ...payload, sizes: [], materials: [], colors: [] }, adminAuthConfig());
+        toast.success('Product created!');
+      } else {
+        await axios.put(`${API}/admin/products/${productDialog.id}`, payload, adminAuthConfig());
+        toast.success('Product updated!');
+      }
+      setProductDialog({ open: false, mode: 'create', id: null });
+      loadProducts();
+    } catch (error) {
+      handleApiError(error, 'Failed to save product');
     }
   };
 
@@ -643,10 +707,16 @@ export const AdminPanel = () => {
               <CardHeader>
                 <div className="flex items-center justify-between">
                   <CardTitle>Product Management</CardTitle>
-                  <Button onClick={loadProducts}>
-                    <RefreshCw className="w-4 h-4 mr-2" />
-                    Refresh Products
-                  </Button>
+                  <div className="flex space-x-2">
+                    <Button variant="outline" onClick={openCreateProduct} data-testid="add-product-button">
+                      <Plus className="w-4 h-4 mr-2" />
+                      Add Product
+                    </Button>
+                    <Button onClick={() => loadProducts()}>
+                      <RefreshCw className="w-4 h-4 mr-2" />
+                      Refresh Products
+                    </Button>
+                  </div>
                 </div>
               </CardHeader>
               <CardContent>
@@ -664,7 +734,7 @@ export const AdminPanel = () => {
                         <div className="flex items-center justify-between">
                           <span className="font-bold text-lg">₹{product.base_price}</span>
                           <div className="flex space-x-1">
-                            <Button size="sm" variant="outline" disabled title="Coming soon">
+                            <Button size="sm" variant="outline" onClick={() => openEditProduct(product)} data-testid={`edit-product-${product.id}`}>
                               <Edit className="w-4 h-4" />
                             </Button>
                             <Button size="sm" variant="destructive" onClick={() => deleteProduct(product.id)} data-testid={`delete-product-${product.id}`}>
@@ -703,6 +773,7 @@ export const AdminPanel = () => {
                         <th className="text-left p-2">Wallet Balance</th>
                         <th className="text-left p-2">Total Spent</th>
                         <th className="text-left p-2">Joined</th>
+                        <th className="text-left p-2">Actions</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -714,6 +785,12 @@ export const AdminPanel = () => {
                           <td className="p-2">₹{user.wallet_balance || 0}</td>
                           <td className="p-2">₹{user.total_spent || 0}</td>
                           <td className="p-2">{new Date(user.created_at).toLocaleDateString()}</td>
+                          <td className="p-2">
+                            <Button size="sm" variant="outline" onClick={() => { setWalletUser(user); setWalletForm({ amount: '', type: 'credit', reason: '' }); }} data-testid={`adjust-wallet-${user.id}`}>
+                              <Wallet className="w-4 h-4 mr-1" />
+                              Adjust Wallet
+                            </Button>
+                          </td>
                         </tr>
                       ))}
                     </tbody>
@@ -779,6 +856,94 @@ export const AdminPanel = () => {
           </TabsContent>
         </Tabs>
       </div>
+
+      {/* Wallet Adjust Dialog */}
+      <Dialog open={!!walletUser} onOpenChange={(o) => !o && setWalletUser(null)}>
+        <DialogContent data-testid="wallet-adjust-dialog">
+          <DialogHeader>
+            <DialogTitle>Adjust Wallet — {walletUser?.name}</DialogTitle>
+            <DialogDescription>
+              Current balance: ₹{walletUser?.wallet_balance || 0}. Every adjustment is logged with your reason.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <Label>Type</Label>
+                <select
+                  value={walletForm.type}
+                  onChange={(e) => setWalletForm({ ...walletForm, type: e.target.value })}
+                  className="w-full mt-1 border rounded-md px-3 py-2 text-sm"
+                  data-testid="wallet-adjust-type"
+                >
+                  <option value="credit">Credit (add)</option>
+                  <option value="debit">Debit (deduct)</option>
+                </select>
+              </div>
+              <div>
+                <Label htmlFor="wallet-amount">Amount (₹)</Label>
+                <Input id="wallet-amount" type="number" min="1" value={walletForm.amount}
+                  onChange={(e) => setWalletForm({ ...walletForm, amount: e.target.value })}
+                  className="mt-1" data-testid="wallet-adjust-amount" />
+              </div>
+            </div>
+            <div>
+              <Label htmlFor="wallet-reason">Reason / Note (required)</Label>
+              <Textarea id="wallet-reason" value={walletForm.reason}
+                onChange={(e) => setWalletForm({ ...walletForm, reason: e.target.value })}
+                placeholder="e.g. Refund for cancelled order #1234" className="mt-1" rows={2}
+                data-testid="wallet-adjust-reason" />
+            </div>
+            <Button onClick={submitWalletAdjust} className="w-full bg-gradient-to-r from-blue-500 to-indigo-600" data-testid="wallet-adjust-submit">
+              Apply Adjustment
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Product Create/Edit Dialog */}
+      <Dialog open={productDialog.open} onOpenChange={(o) => setProductDialog({ ...productDialog, open: o })}>
+        <DialogContent data-testid="product-form-dialog">
+          <DialogHeader>
+            <DialogTitle>{productDialog.mode === 'create' ? 'Add Product' : 'Edit Product'}</DialogTitle>
+            <DialogDescription>Manage product details for your store.</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div>
+              <Label htmlFor="p-name">Name *</Label>
+              <Input id="p-name" value={productForm.name} onChange={(e) => setProductForm({ ...productForm, name: e.target.value })} className="mt-1" data-testid="product-name-input" />
+            </div>
+            <div>
+              <Label htmlFor="p-desc">Description</Label>
+              <Textarea id="p-desc" value={productForm.description} onChange={(e) => setProductForm({ ...productForm, description: e.target.value })} className="mt-1" rows={2} data-testid="product-desc-input" />
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <Label>Category</Label>
+                <select value={productForm.category} onChange={(e) => setProductForm({ ...productForm, category: e.target.value })} className="w-full mt-1 border rounded-md px-3 py-2 text-sm" data-testid="product-category-input">
+                  <option value="frames">Frames</option>
+                  <option value="mugs">Mugs</option>
+                  <option value="tshirts">T-Shirts</option>
+                  <option value="acrylic">Acrylic</option>
+                  <option value="led">LED</option>
+                  <option value="corporate">Corporate</option>
+                </select>
+              </div>
+              <div>
+                <Label htmlFor="p-price">Base Price (₹) *</Label>
+                <Input id="p-price" type="number" min="0" value={productForm.base_price} onChange={(e) => setProductForm({ ...productForm, base_price: e.target.value })} className="mt-1" data-testid="product-price-input" />
+              </div>
+            </div>
+            <div>
+              <Label htmlFor="p-img">Image URL</Label>
+              <Input id="p-img" value={productForm.image_url} onChange={(e) => setProductForm({ ...productForm, image_url: e.target.value })} className="mt-1" placeholder="https://..." data-testid="product-image-input" />
+            </div>
+            <Button onClick={submitProduct} className="w-full bg-gradient-to-r from-blue-500 to-indigo-600" data-testid="product-form-submit">
+              {productDialog.mode === 'create' ? 'Create Product' : 'Save Changes'}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 };

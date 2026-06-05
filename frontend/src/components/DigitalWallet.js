@@ -25,6 +25,9 @@ import {
   Calendar,
   Filter
 } from "lucide-react";
+import axios from 'axios';
+
+const API = `${process.env.REACT_APP_BACKEND_URL}/api`;
 
 export const DigitalWallet = ({ userId, onBalanceUpdate }) => {
   const [walletData, setWalletData] = useState({
@@ -40,7 +43,7 @@ export const DigitalWallet = ({ userId, onBalanceUpdate }) => {
   const [showBalance, setShowBalance] = useState(true);
   const [selectedTimeFilter, setSelectedTimeFilter] = useState('all');
 
-  // Load wallet data from localStorage
+  // Load wallet data from backend
   useEffect(() => {
     if (userId) {
       loadWalletData();
@@ -48,59 +51,43 @@ export const DigitalWallet = ({ userId, onBalanceUpdate }) => {
     }
   }, [userId]);
 
-  const loadWalletData = () => {
+  const loadWalletData = async () => {
     try {
-      const walletInfo = localStorage.getItem(`memories_wallet_${userId}`);
-      if (walletInfo) {
-        const parsedWallet = JSON.parse(walletInfo);
-        setWalletData(parsedWallet);
-      } else {
-        // Initialize default wallet
-        const defaultWallet = {
-          balance: 0,
-          rewardPoints: 0,
-          storeCredits: 0,
-          tier: 'Silver',
-          totalSpent: 0,
-          createdAt: new Date().toISOString()
-        };
-        setWalletData(defaultWallet);
-        localStorage.setItem(`memories_wallet_${userId}`, JSON.stringify(defaultWallet));
-      }
+      const res = await axios.get(`${API}/users/${userId}/wallet`);
+      const w = res.data;
+      const mapped = {
+        balance: w.balance || 0,
+        rewardPoints: w.reward_points || 0,
+        storeCredits: w.store_credits || 0,
+        tier: w.tier || 'Silver',
+        totalSpent: w.total_spent || 0,
+      };
+      setWalletData(mapped);
+      onBalanceUpdate?.(mapped);
     } catch (error) {
       console.error('Error loading wallet data:', error);
     }
   };
 
-  const loadTransactions = () => {
+  const loadTransactions = async () => {
     try {
-      const transactionHistory = localStorage.getItem(`memories_transactions_${userId}`) || '[]';
-      const parsedTransactions = JSON.parse(transactionHistory);
-      setTransactions(parsedTransactions);
+      const res = await axios.get(`${API}/users/${userId}/wallet/transactions`);
+      const mapped = (res.data || []).map((t) => ({
+        id: t.id,
+        type: t.type,
+        amount: t.amount,
+        description: t.description,
+        category: t.category,
+        status: t.status || 'completed',
+        isPoints: t.is_points,
+        creditEarned: t.credit_earned,
+        timestamp: t.created_at,
+      }));
+      setTransactions(mapped);
     } catch (error) {
       console.error('Error loading transactions:', error);
       setTransactions([]);
     }
-  };
-
-  const saveWalletData = (newWalletData) => {
-    localStorage.setItem(`memories_wallet_${userId}`, JSON.stringify(newWalletData));
-    setWalletData(newWalletData);
-    onBalanceUpdate?.(newWalletData);
-  };
-
-  const addTransaction = (transaction) => {
-    const newTransaction = {
-      id: `txn_${Date.now()}`,
-      timestamp: new Date().toISOString(),
-      ...transaction
-    };
-    
-    const updatedTransactions = [newTransaction, ...transactions];
-    setTransactions(updatedTransactions);
-    localStorage.setItem(`memories_transactions_${userId}`, JSON.stringify(updatedTransactions));
-    
-    return newTransaction;
   };
 
   const addMoney = async (amount) => {
@@ -108,134 +95,38 @@ export const DigitalWallet = ({ userId, onBalanceUpdate }) => {
       toast.error('Please enter a valid amount');
       return;
     }
-
     setIsLoading(true);
     try {
-      // Simulate payment processing (in production, integrate with actual payment gateway)
-      await new Promise(resolve => setTimeout(resolve, 2000));
-      
-      const newBalance = walletData.balance + parseFloat(amount);
-      const updatedWallet = {
-        ...walletData,
-        balance: newBalance
-      };
-      
-      saveWalletData(updatedWallet);
-      
-      // Add transaction record
-      addTransaction({
-        type: 'credit',
-        amount: parseFloat(amount),
-        description: 'Money added to wallet',
-        category: 'topup',
-        method: 'card', // In production, get from payment method
-        status: 'completed',
-        balanceAfter: newBalance
+      const res = await axios.post(`${API}/users/${userId}/wallet/add-money`, null, {
+        params: { amount: parseFloat(amount) },
       });
-      
       toast.success(`₹${amount} added to your wallet successfully! 💰`, {
-        description: `New balance: ₹${newBalance}`,
-        duration: 4000
+        description: `New balance: ₹${res.data.new_balance}`,
+        duration: 4000,
       });
-      
       setAddMoneyAmount('');
+      await loadWalletData();
+      await loadTransactions();
     } catch (error) {
       console.error('Error adding money:', error);
-      toast.error('Failed to add money. Please try again.');
+      toast.error(error.response?.data?.detail || 'Failed to add money. Please try again.');
     } finally {
       setIsLoading(false);
     }
   };
 
-  const useWalletForPayment = (amount, orderId) => {
-    if (amount > walletData.balance) {
-      toast.error('Insufficient wallet balance');
-      return false;
+  const convertPointsToCredits = async (points) => {
+    try {
+      const res = await axios.post(`${API}/users/${userId}/wallet/convert-points`, null, {
+        params: { points },
+      });
+      toast.success(`✨ Converted ${points} points to ₹${res.data.credit_earned} store credit!`);
+      await loadWalletData();
+      await loadTransactions();
+    } catch (error) {
+      console.error('Error converting points:', error);
+      toast.error(error.response?.data?.detail || 'Failed to convert points');
     }
-    
-    const newBalance = walletData.balance - amount;
-    const updatedWallet = {
-      ...walletData,
-      balance: newBalance,
-      totalSpent: walletData.totalSpent + amount
-    };
-    
-    // Update tier based on total spent
-    if (updatedWallet.totalSpent >= 10000) {
-      updatedWallet.tier = 'Platinum';
-    } else if (updatedWallet.totalSpent >= 5000) {
-      updatedWallet.tier = 'Gold';
-    }
-    
-    saveWalletData(updatedWallet);
-    
-    // Add transaction record
-    addTransaction({
-      type: 'debit',
-      amount: amount,
-      description: `Payment for order #${orderId}`,
-      category: 'purchase',
-      orderId: orderId,
-      status: 'completed',
-      balanceAfter: newBalance
-    });
-    
-    return true;
-  };
-
-  const addRewardPoints = (points, reason) => {
-    const updatedWallet = {
-      ...walletData,
-      rewardPoints: walletData.rewardPoints + points
-    };
-    
-    saveWalletData(updatedWallet);
-    
-    addTransaction({
-      type: 'credit',
-      amount: points,
-      description: reason,
-      category: 'rewards',
-      status: 'completed',
-      isPoints: true,
-      balanceAfter: walletData.balance
-    });
-    
-    toast.success(`🎉 Earned ${points} reward points!`, {
-      description: reason,
-      duration: 3000
-    });
-  };
-
-  const convertPointsToCredits = (points) => {
-    if (points > walletData.rewardPoints) {
-      toast.error('Insufficient reward points');
-      return;
-    }
-    
-    // 100 points = ₹10 store credit (10% value)
-    const creditValue = (points / 100) * 10;
-    
-    const updatedWallet = {
-      ...walletData,
-      rewardPoints: walletData.rewardPoints - points,
-      storeCredits: walletData.storeCredits + creditValue
-    };
-    
-    saveWalletData(updatedWallet);
-    
-    addTransaction({
-      type: 'conversion',
-      amount: points,
-      description: `Converted ${points} points to ₹${creditValue} store credit`,
-      category: 'conversion',
-      status: 'completed',
-      creditEarned: creditValue,
-      isPoints: true,
-      balanceAfter: walletData.balance
-    });
-    
-    toast.success(`✨ Converted ${points} points to ₹${creditValue} store credit!`);
   };
 
   const getTierColor = (tier) => {

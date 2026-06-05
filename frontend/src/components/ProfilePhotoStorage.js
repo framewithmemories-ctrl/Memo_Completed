@@ -1,4 +1,5 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
+import axios from 'axios';
 import { Button } from "./ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "./ui/card";
 import { Badge } from "./ui/badge";
@@ -21,6 +22,22 @@ import {
   Filter
 } from "lucide-react";
 
+const API = `${process.env.REACT_APP_BACKEND_URL}/api`;
+
+const mapPhoto = (p) => ({
+  id: p.id,
+  url: p.image_url || (p.image_data ? `data:image/jpeg;base64,${p.image_data}` : ''),
+  name: p.name,
+  savedAt: p.created_at,
+  usageCount: p.usage_count || 0,
+  favorite: p.favorite || false,
+  dimensions: p.dimensions || {},
+  size: p.size,
+  tags: p.tags || [],
+  notes: p.notes || '',
+  type: 'image',
+});
+
 export const ProfilePhotoStorage = ({ userId, onPhotoSelected }) => {
   const [savedPhotos, setSavedPhotos] = useState([]);
   const [isLoading, setIsLoading] = useState(false);
@@ -28,84 +45,104 @@ export const ProfilePhotoStorage = ({ userId, onPhotoSelected }) => {
   const [viewMode, setViewMode] = useState('grid'); // 'grid' or 'list'
   const [searchTerm, setSearchTerm] = useState('');
   const [filterTag, setFilterTag] = useState('all');
+  const fileInputRef = useRef(null);
 
-  // Load saved photos from localStorage on mount
+  // Load saved photos from backend on mount
   useEffect(() => {
     if (userId) {
       loadSavedPhotos();
     }
   }, [userId]);
 
-  const loadSavedPhotos = () => {
+  const loadSavedPhotos = async () => {
     try {
-      const userPhotos = localStorage.getItem(`memories_photos_${userId}`) || '[]';
-      const photos = JSON.parse(userPhotos);
-      setSavedPhotos(photos);
+      const res = await axios.get(`${API}/users/${userId}/photos`);
+      setSavedPhotos((res.data || []).map(mapPhoto));
     } catch (error) {
       console.error('Error loading saved photos:', error);
       setSavedPhotos([]);
     }
   };
 
-  const savePhotoToProfile = (photoData, tags = [], notes = '') => {
-    try {
-      const newPhoto = {
-        id: `photo_${Date.now()}`,
-        ...photoData,
-        tags: tags || ['general'],
-        notes: notes || '',
-        savedAt: new Date().toISOString(),
-        favorite: false,
-        usageCount: 0
-      };
-
-      const updatedPhotos = [newPhoto, ...savedPhotos];
-      setSavedPhotos(updatedPhotos);
-      localStorage.setItem(`memories_photos_${userId}`, JSON.stringify(updatedPhotos));
-      
-      toast.success('📸 Photo saved to your profile!', {
-        description: 'You can now reuse this photo for future orders',
-        duration: 3000
+  const handleFileUpload = async (e) => {
+    const files = Array.from(e.target.files || []);
+    if (!files.length) return;
+    setIsLoading(true);
+    let uploaded = 0;
+    for (const file of files) {
+      try {
+        const dataUrl = await new Promise((res, rej) => {
+          const reader = new FileReader();
+          reader.onload = () => res(reader.result);
+          reader.onerror = rej;
+          reader.readAsDataURL(file);
+        });
+        const base64 = dataUrl.split(',')[1];
+        const dims = await new Promise((res) => {
+          const img = new Image();
+          img.onload = () => res({ width: img.width, height: img.height });
+          img.onerror = () => res({ width: 0, height: 0 });
+          img.src = dataUrl;
+        });
+        await axios.post(`${API}/users/${userId}/photos`, {
+          user_id: userId,
+          name: file.name,
+          image_data: base64,
+          image_url: dataUrl,
+          dimensions: dims,
+          size: parseFloat((file.size / 1024 / 1024).toFixed(2)),
+          tags: ['uploaded'],
+          notes: '',
+        });
+        uploaded += 1;
+      } catch (err) {
+        console.error('Upload error', err);
+        toast.error(`Failed to upload ${file.name}`);
+      }
+    }
+    await loadSavedPhotos();
+    setIsLoading(false);
+    if (fileInputRef.current) fileInputRef.current.value = '';
+    if (uploaded > 0) {
+      toast.success(`📸 ${uploaded} photo(s) saved to your profile!`, {
+        description: 'You can now reuse them for future orders, on any device.',
+        duration: 3000,
       });
-      
-      return newPhoto;
-    } catch (error) {
-      console.error('Error saving photo:', error);
-      toast.error('Failed to save photo. Please try again.');
-      return null;
     }
   };
 
-  const deletePhoto = (photoId) => {
-    const updatedPhotos = savedPhotos.filter(photo => photo.id !== photoId);
-    setSavedPhotos(updatedPhotos);
-    localStorage.setItem(`memories_photos_${userId}`, JSON.stringify(updatedPhotos));
-    toast.success('Photo deleted from your collection');
+  const deletePhoto = async (photoId) => {
+    try {
+      await axios.delete(`${API}/users/${userId}/photos/${photoId}`);
+      setSavedPhotos((prev) => prev.filter((photo) => photo.id !== photoId));
+      toast.success('Photo deleted from your collection');
+    } catch (error) {
+      toast.error('Failed to delete photo');
+    }
   };
 
-  const toggleFavorite = (photoId) => {
-    const updatedPhotos = savedPhotos.map(photo => 
-      photo.id === photoId 
-        ? { ...photo, favorite: !photo.favorite }
-        : photo
-    );
-    setSavedPhotos(updatedPhotos);
-    localStorage.setItem(`memories_photos_${userId}`, JSON.stringify(updatedPhotos));
+  const toggleFavorite = async (photoId) => {
+    try {
+      const res = await axios.put(`${API}/users/${userId}/photos/${photoId}/favorite`);
+      setSavedPhotos((prev) => prev.map((photo) =>
+        photo.id === photoId ? { ...photo, favorite: res.data.favorite } : photo
+      ));
+      setSelectedPhoto((prev) => (prev && prev.id === photoId ? { ...prev, favorite: res.data.favorite } : prev));
+    } catch (error) {
+      toast.error('Failed to update favorite');
+    }
   };
 
-  const usePhotoForOrder = (photo) => {
-    // Update usage count
-    const updatedPhotos = savedPhotos.map(p => 
-      p.id === photo.id 
-        ? { ...p, usageCount: (p.usageCount || 0) + 1, lastUsed: new Date().toISOString() }
-        : p
-    );
-    setSavedPhotos(updatedPhotos);
-    localStorage.setItem(`memories_photos_${userId}`, JSON.stringify(updatedPhotos));
-    
-    // Callback to parent component
+  const usePhotoForOrder = async (photo) => {
+    try {
+      await axios.put(`${API}/users/${userId}/photos/${photo.id}/use`);
+    } catch (error) {
+      // non-blocking
+    }
+    setSavedPhotos((prev) => prev.map((p) =>
+      p.id === photo.id ? { ...p, usageCount: (p.usageCount || 0) + 1 } : p
+    ));
     onPhotoSelected?.(photo);
-    
     toast.success(`Using "${photo.name || 'Saved Photo'}" for your order! 🎨`);
   };
 
@@ -151,6 +188,26 @@ export const ProfilePhotoStorage = ({ userId, onPhotoSelected }) => {
           </div>
           
           <div className="flex items-center space-x-2">
+            <input
+              ref={fileInputRef}
+              id="photo-upload"
+              type="file"
+              accept="image/*"
+              multiple
+              className="hidden"
+              onChange={handleFileUpload}
+              data-testid="photo-upload-input"
+            />
+            <Button
+              size="sm"
+              onClick={() => fileInputRef.current?.click()}
+              disabled={isLoading}
+              data-testid="upload-photo-button"
+              className="bg-gradient-to-r from-purple-500 to-pink-500 hover:from-purple-600 hover:to-pink-600"
+            >
+              <Upload className="w-4 h-4 mr-1" />
+              {isLoading ? 'Uploading...' : 'Upload'}
+            </Button>
             <Button
               variant="outline"
               size="sm"
@@ -204,11 +261,12 @@ export const ProfilePhotoStorage = ({ userId, onPhotoSelected }) => {
               Upload photos and save them to your profile for easy reuse in future orders
             </p>
             <Button
-              onClick={() => document.getElementById('photo-upload')?.click()}
+              onClick={() => fileInputRef.current?.click()}
+              disabled={isLoading}
               className="bg-gradient-to-r from-purple-500 to-pink-500 hover:from-purple-600 hover:to-pink-600"
             >
               <Upload className="w-4 h-4 mr-2" />
-              Upload First Photo
+              {isLoading ? 'Uploading...' : 'Upload First Photo'}
             </Button>
           </div>
         ) : filteredPhotos.length === 0 ? (
