@@ -91,7 +91,7 @@ export const AccountButton = () => {
     try {
       const u = await login(loginForm.email, loginForm.password);
       toast.success(`Welcome back, ${u.name}! 🎉`);
-      setOpen(false);
+      setActiveTab('profile');
       setLoginForm({ email: '', password: '' });
     } catch (err) {
       toast.error(formatApiError(err.response?.data?.detail) || 'Login failed');
@@ -106,7 +106,7 @@ export const AccountButton = () => {
     try {
       const u = await register(registerForm);
       toast.success(`Welcome to Memories, ${u.name}! 🎉`);
-      setOpen(false);
+      setActiveTab('profile');
       setRegisterForm({ name: '', email: '', password: '', phone: '' });
     } catch (err) {
       toast.error(formatApiError(err.response?.data?.detail) || 'Registration failed');

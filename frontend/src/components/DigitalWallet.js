@@ -248,7 +248,7 @@ export const DigitalWallet = ({ userId, onBalanceUpdate }) => {
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mt-6">
             <Dialog>
               <DialogTrigger asChild>
-                <Button className="bg-gradient-to-r from-green-500 to-emerald-500 hover:from-green-600 hover:to-emerald-600">
+                <Button className="bg-gradient-to-r from-green-500 to-emerald-500 hover:from-green-600 hover:to-emerald-600" data-testid="wallet-add-money-open">
                   <Plus className="w-4 h-4 mr-2" />
                   Add Money
                 </Button>
@@ -272,6 +272,7 @@ export const DigitalWallet = ({ userId, onBalanceUpdate }) => {
                       value={addMoneyAmount}
                       onChange={(e) => setAddMoneyAmount(e.target.value)}
                       min="1"
+                      data-testid="wallet-add-amount-input"
                     />
                   </div>
                   
@@ -292,6 +293,7 @@ export const DigitalWallet = ({ userId, onBalanceUpdate }) => {
                     onClick={() => addMoney(addMoneyAmount)}
                     disabled={isLoading || !addMoneyAmount}
                     className="w-full bg-gradient-to-r from-green-500 to-emerald-500 hover:from-green-600 hover:to-emerald-600"
+                    data-testid="wallet-add-money-submit"
                   >
                     {isLoading ? (
                       <>
