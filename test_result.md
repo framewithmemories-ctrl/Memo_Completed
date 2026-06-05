@@ -118,7 +118,7 @@ backend:
         comment: "Backend is running on port 8001 with MongoDB integration and LLM functionality"
       - working: true
         agent: "testing"
-        comment: "✅ Backend server fully operational. API health check passed (200 OK). All endpoints accessible via https://gift-customizer-1.preview.emergentagent.com/api. MongoDB connection working properly."
+        comment: "✅ Backend server fully operational. API health check passed (200 OK). All endpoints accessible via https://photo-frames-dash.preview.emergentagent.com/api. MongoDB connection working properly."
 
   - task: "Product Management API"
     implemented: true

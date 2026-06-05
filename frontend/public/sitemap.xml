@@ -4,7 +4,7 @@
   
   <!-- Homepage -->
   <url>
-    <loc>https://gift-customizer-1.preview.emergentagent.com/</loc>
+    <loc>https://photo-frames-dash.preview.emergentagent.com/</loc>
     <lastmod>2025-01-26</lastmod>
     <changefreq>daily</changefreq>
     <priority>1.0</priority>
@@ -16,7 +16,7 @@
   
   <!-- Shop Section -->
   <url>
-    <loc>https://gift-customizer-1.preview.emergentagent.com/#shop</loc>
+    <loc>https://photo-frames-dash.preview.emergentagent.com/#shop</loc>
     <lastmod>2025-01-26</lastmod>
     <changefreq>weekly</changefreq>
     <priority>0.9</priority>
@@ -24,7 +24,7 @@
   
   <!-- Photo Customizer -->
   <url>
-    <loc>https://gift-customizer-1.preview.emergentagent.com/#customizer</loc>
+    <loc>https://photo-frames-dash.preview.emergentagent.com/#customizer</loc>
     <lastmod>2025-01-26</lastmod>
     <changefreq>weekly</changefreq>
     <priority>0.9</priority>
@@ -32,7 +32,7 @@
   
   <!-- AI Gift Finder -->
   <url>
-    <loc>https://gift-customizer-1.preview.emergentagent.com/#ai-finder</loc>
+    <loc>https://photo-frames-dash.preview.emergentagent.com/#ai-finder</loc>
     <lastmod>2025-01-26</lastmod>
     <changefreq>weekly</changefreq>
     <priority>0.8</priority>
@@ -40,7 +40,7 @@
   
   <!-- Customer Reviews -->
   <url>
-    <loc>https://gift-customizer-1.preview.emergentagent.com/#testimonials</loc>
+    <loc>https://photo-frames-dash.preview.emergentagent.com/#testimonials</loc>
     <lastmod>2025-01-26</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.7</priority>
@@ -48,7 +48,7 @@
   
   <!-- About Section -->
   <url>
-    <loc>https://gift-customizer-1.preview.emergentagent.com/#about</loc>
+    <loc>https://photo-frames-dash.preview.emergentagent.com/#about</loc>
     <lastmod>2025-01-26</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.6</priority>
