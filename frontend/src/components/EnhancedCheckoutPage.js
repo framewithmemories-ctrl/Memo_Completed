@@ -1,4 +1,6 @@
 import React, { useState, useEffect } from 'react';
+import axios from 'axios';
+import { useAuth } from "../context/AuthContext";
 import { Button } from "./ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "./ui/card";
 import { Badge } from "./ui/badge";
@@ -24,11 +26,17 @@ import {
   Clock,
   Wallet,
   Plus,
-  Minus
+  Minus,
+  Printer,
+  Share2,
+  Home
 } from "lucide-react";
 
+const API = `${process.env.REACT_APP_BACKEND_URL}/api`;
+
 export const EnhancedCheckoutPage = ({ onClose }) => {
-  const { cartItems, updateQuantity, removeFromCart } = useCart();
+  const { user } = useAuth();
+  const { cartItems, updateQuantity, removeFromCart, clearCart } = useCart();
   const [formData, setFormData] = useState({
     name: '',
     email: '',
@@ -43,30 +51,40 @@ export const EnhancedCheckoutPage = ({ onClose }) => {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [useWalletBalance, setUseWalletBalance] = useState(false);
   const [showLiveUpdates, setShowLiveUpdates] = useState(true);
+  const [placedOrder, setPlacedOrder] = useState(null);
 
-  // Load user profile and wallet on mount
+  // Load user profile (auth) and wallet (backend) on mount
   useEffect(() => {
-    try {
-      const profile = JSON.parse(localStorage.getItem('memoriesUserProfile') || '{}');
-      const wallet = profile.id ? JSON.parse(localStorage.getItem(`memories_wallet_${profile.id}`) || '{}') : {};
-      
-      if (profile.profileComplete) {
-        setUserProfile(profile);
-        setUserWallet(wallet);
-        
-        // Pre-fill form with profile data
-        setFormData(prev => ({
-          ...prev,
-          name: profile.name || '',
-          email: profile.email || '',
-          phone: profile.phone || '',
-          address: profile.city || ''
-        }));
+    if (user) {
+      setUserProfile({ id: user.id, name: user.name, email: user.email, phone: user.phone });
+      setFormData(prev => ({
+        ...prev,
+        name: user.name || '',
+        email: user.email || '',
+        phone: user.phone || '',
+        address: user.address || prev.address,
+      }));
+      axios.get(`${API}/users/${user.id}/wallet`)
+        .then(r => setUserWallet({ balance: r.data.balance || 0 }))
+        .catch(() => {});
+    } else {
+      try {
+        const profile = JSON.parse(localStorage.getItem('memoriesUserProfile') || '{}');
+        if (profile.profileComplete) {
+          setUserProfile(profile);
+          setFormData(prev => ({
+            ...prev,
+            name: profile.name || '',
+            email: profile.email || '',
+            phone: profile.phone || '',
+            address: profile.city || prev.address,
+          }));
+        }
+      } catch (error) {
+        console.error('Error loading user data:', error);
       }
-    } catch (error) {
-      console.error('Error loading user data:', error);
     }
-  }, []);
+  }, [user]);
 
   // Calculate pricing with live updates
   const getItemTotal = (item) => item.price * item.quantity;
@@ -156,15 +174,15 @@ export const EnhancedCheckoutPage = ({ onClose }) => {
     return messages;
   };
 
-  // Enhanced order submission with backend validation and dynamic content
+  // Order submission: persists to backend, deducts wallet, shows invoice
   const handleSubmit = async (e) => {
     e.preventDefault();
-    
+
     if (!formData.name || !formData.email || !formData.phone) {
       toast.error('Please fill in all required fields');
       return;
     }
-    
+
     if (formData.deliveryType === 'delivery' && !formData.address) {
       toast.error('Please provide delivery address');
       return;
@@ -173,86 +191,212 @@ export const EnhancedCheckoutPage = ({ onClose }) => {
     setIsSubmitting(true);
 
     try {
-      // Enhanced order processing with backend validation
-      const orderData = {
-        id: `ORD${Date.now()}`,
-        items: cartItems,
-        customer: formData,
-        totals: {
-          subtotal: getSubtotal(),
-          delivery: getDeliveryCharge(),
-          tax: getTaxAmount(),
-          walletDiscount: getWalletDiscount(),
-          final: getFinalTotal()
-        },
-        paymentMethod: formData.paymentMethod,
-        deliveryType: formData.deliveryType,
-        createdAt: new Date().toISOString()
+      const totals = {
+        subtotal: getSubtotal(),
+        delivery: getDeliveryCharge(),
+        tax: getTaxAmount(),
+        walletDiscount: getWalletDiscount(),
+        final: getFinalTotal(),
       };
 
-      // Wallet balance update if used
-      if (useWalletBalance && userWallet && userProfile && getWalletDiscount() > 0) {
-        const newBalance = (userWallet.balance || 0) - getWalletDiscount();
-        const updatedWallet = { ...userWallet, balance: newBalance };
-        localStorage.setItem(`memories_wallet_${userProfile.id}`, JSON.stringify(updatedWallet));
-        setUserWallet(updatedWallet);
-        
-        // Add transaction record
-        const transactions = JSON.parse(localStorage.getItem(`memories_transactions_${userProfile.id}`) || '[]');
-        transactions.unshift({
-          id: `txn_${Date.now()}`,
-          type: 'debit',
-          amount: getWalletDiscount(),
-          description: `Payment for order ${orderData.id}`,
-          category: 'purchase',
-          orderId: orderData.id,
-          timestamp: new Date().toISOString(),
-          status: 'completed'
-        });
-        localStorage.setItem(`memories_transactions_${userProfile.id}`, JSON.stringify(transactions));
+      const orderPayload = {
+        user_id: user?.id || `guest_${Date.now()}`,
+        items: cartItems.map((it) => ({
+          product_id: it.productId || it.id,
+          name: it.name,
+          price: it.price,
+          quantity: it.quantity,
+          image: it.image,
+          category: it.category,
+        })),
+        total_amount: totals.final,
+        delivery_type: formData.deliveryType,
+        delivery_address:
+          formData.deliveryType === 'delivery'
+            ? { address: formData.address, instructions: formData.instructions }
+            : null,
+      };
+
+      const res = await axios.post(`${API}/orders`, orderPayload);
+      const order = res.data;
+
+      // Deduct from backend wallet if used
+      if (useWalletBalance && user && totals.walletDiscount > 0) {
+        try {
+          await axios.post(`${API}/users/${user.id}/wallet/pay`, null, {
+            params: { amount: totals.walletDiscount, order_id: order.id },
+          });
+        } catch (err) {
+          console.error('Wallet payment failed:', err);
+        }
       }
 
-      // Simulate backend processing
-      await new Promise(resolve => setTimeout(resolve, 2000));
-      
-      // ENHANCED: Dynamic success message based on order type
-      const hasAcrylicFrames = cartItems.some(item => 
-        item.category === 'acrylic' || 
-        item.name.toLowerCase().includes('acrylic') ||
-        item.name.toLowerCase().includes('frame')
-      );
-      const isStorePickup = formData.deliveryType === 'pickup';
-      
-      let successMessage = '🎉 Order placed successfully!';
-      let description = `Order ID: ${orderData.id}`;
-      
-      if (hasAcrylicFrames && isStorePickup) {
-        successMessage = '🏪 Store Pickup Ready!';
-        description = `Custom frames will be ready for pickup at Keeranatham Road in 2-3 days • Order ID: ${orderData.id}`;
-      } else if (hasAcrylicFrames) {
-        successMessage = '🖼️ Custom Frames Processing!';
-        description = `Your custom photo frames are being crafted • Delivery in 3-5 days • Order ID: ${orderData.id}`;
-      } else if (isStorePickup) {
-        successMessage = '🏪 Store Pickup Confirmed!';
-        description = `Ready for pickup at our Keeranatham Road store • Order ID: ${orderData.id}`;
-      }
-
-      toast.success(successMessage, {
-        description: description,
-        duration: 5000
+      // Snapshot for the invoice (cart is cleared right after)
+      setPlacedOrder({
+        id: order.id,
+        items: cartItems,
+        customer: { ...formData },
+        totals,
+        createdAt: order.created_at,
+        pointsEarned: order.points_earned || 0,
       });
-      
-      // Clear cart and close
-      cartItems.forEach(item => removeFromCart(item.id));
-      onClose();
-      
+
+      clearCart();
+
+      toast.success('🎉 Order placed successfully!', {
+        description: `Order ID: ${order.id.substring(0, 8).toUpperCase()}`,
+        duration: 5000,
+      });
     } catch (error) {
       console.error('Order submission error:', error);
-      toast.error('Failed to place order. Please try again.');
+      toast.error(error.response?.data?.detail || 'Failed to place order. Please try again.');
     } finally {
       setIsSubmitting(false);
     }
   };
+
+  // Share order summary on WhatsApp
+  const shareOnWhatsApp = () => {
+    if (!placedOrder) return;
+    const { id, items, customer, totals } = placedOrder;
+    const lines = [
+      `*Memories Order Confirmation*`,
+      ``,
+      `Order ID: ${id.substring(0, 8).toUpperCase()}`,
+      `Name: ${customer.name}`,
+      `Phone: ${customer.phone}`,
+      ``,
+      `*Items:*`,
+      ...items.map((i) => `• ${i.name} x${i.quantity} = ₹${i.price * i.quantity}`),
+      ``,
+      `Subtotal: ₹${totals.subtotal}`,
+      `Delivery: ${totals.delivery === 0 ? 'FREE' : '₹' + totals.delivery}`,
+      `Tax (GST): ₹${totals.tax}`,
+      totals.walletDiscount > 0 ? `Wallet: -₹${totals.walletDiscount}` : null,
+      `*Total: ₹${totals.final}*`,
+      ``,
+      `${customer.deliveryType === 'pickup' ? 'Store Pickup at Keeranatham Road' : 'Delivery to: ' + customer.address}`,
+    ].filter(Boolean);
+    const text = encodeURIComponent(lines.join('\n'));
+    window.open(`https://wa.me/918148040148?text=${text}`, '_blank');
+  };
+
+  // Print the invoice in an isolated window
+  const printInvoice = () => {
+    if (!placedOrder) return;
+    const { id, items, customer, totals, createdAt } = placedOrder;
+    const rows = items
+      .map(
+        (i) =>
+          `<tr><td>${i.name}</td><td style="text-align:center">${i.quantity}</td><td style="text-align:right">₹${i.price}</td><td style="text-align:right">₹${i.price * i.quantity}</td></tr>`
+      )
+      .join('');
+    const html = `<!doctype html><html><head><title>Invoice ${id.substring(0, 8).toUpperCase()}</title>
+      <style>
+        body{font-family:Arial,sans-serif;color:#1f2937;padding:32px;max-width:700px;margin:auto}
+        h1{color:#e11d48;margin:0}
+        .muted{color:#6b7280;font-size:13px}
+        table{width:100%;border-collapse:collapse;margin-top:16px}
+        th,td{padding:8px;border-bottom:1px solid #e5e7eb;font-size:14px}
+        th{text-align:left;background:#fdf2f8}
+        .totals td{border:none;padding:4px 8px}
+        .grand{font-weight:bold;font-size:16px;border-top:2px solid #111;padding-top:8px}
+      </style></head><body>
+      <div style="display:flex;justify-content:space-between;align-items:flex-start">
+        <div><h1>Memories</h1><div class="muted">Photo Frames & Custom Gifts<br/>Keeranatham Road, Coimbatore<br/>+91 81480 40148</div></div>
+        <div style="text-align:right"><strong>INVOICE</strong><div class="muted">#${id.substring(0, 8).toUpperCase()}<br/>${new Date(createdAt).toLocaleString()}</div></div>
+      </div>
+      <div style="margin-top:16px"><strong>Bill To:</strong><div class="muted">${customer.name}<br/>${customer.email}<br/>${customer.phone}<br/>${customer.deliveryType === 'pickup' ? 'Store Pickup' : customer.address}</div></div>
+      <table><thead><tr><th>Item</th><th style="text-align:center">Qty</th><th style="text-align:right">Price</th><th style="text-align:right">Amount</th></tr></thead><tbody>${rows}</tbody></table>
+      <table class="totals" style="margin-top:8px"><tbody>
+        <tr><td>Subtotal</td><td style="text-align:right">₹${totals.subtotal}</td></tr>
+        <tr><td>Delivery</td><td style="text-align:right">${totals.delivery === 0 ? 'FREE' : '₹' + totals.delivery}</td></tr>
+        <tr><td>Tax (GST 18%)</td><td style="text-align:right">₹${totals.tax}</td></tr>
+        ${totals.walletDiscount > 0 ? `<tr><td>Wallet Discount</td><td style="text-align:right">-₹${totals.walletDiscount}</td></tr>` : ''}
+        <tr class="grand"><td>Total</td><td style="text-align:right">₹${totals.final}</td></tr>
+      </tbody></table>
+      <p class="muted" style="margin-top:24px;text-align:center">Thank you for shopping with Memories! ❤️</p>
+      </body></html>`;
+    const w = window.open('', '_blank', 'width=800,height=600');
+    if (w) {
+      w.document.write(html);
+      w.document.close();
+      w.focus();
+      setTimeout(() => w.print(), 400);
+    }
+  };
+
+  // Invoice / order confirmation screen
+  if (placedOrder) {
+    const { id, items, customer, totals, pointsEarned } = placedOrder;
+    return (
+      <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4" data-testid="order-confirmation">
+        <div className="bg-white rounded-lg w-full max-w-2xl max-h-[90vh] overflow-y-auto">
+          <div className="p-6 md:p-8 text-center border-b">
+            <div className="w-16 h-16 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-3">
+              <CheckCircle className="w-9 h-9 text-green-600" />
+            </div>
+            <h1 className="text-2xl font-bold text-gray-900">Order Confirmed!</h1>
+            <p className="text-gray-600 mt-1">Thank you, {customer.name}. Your order is placed.</p>
+            <Badge className="mt-3 bg-rose-100 text-rose-700" data-testid="order-id-badge">
+              Order #{id.substring(0, 8).toUpperCase()}
+            </Badge>
+          </div>
+
+          <div className="p-6 md:p-8 space-y-4">
+            <div className="space-y-2">
+              {items.map((item) => (
+                <div key={item.id} className="flex justify-between text-sm">
+                  <span className="text-gray-700">{item.name} <span className="text-gray-400">x{item.quantity}</span></span>
+                  <span className="font-medium">₹{item.price * item.quantity}</span>
+                </div>
+              ))}
+            </div>
+            <Separator />
+            <div className="space-y-1 text-sm">
+              <div className="flex justify-between"><span>Subtotal</span><span>₹{totals.subtotal}</span></div>
+              <div className="flex justify-between"><span>Delivery</span><span>{totals.delivery === 0 ? <span className="text-green-600">FREE</span> : `₹${totals.delivery}`}</span></div>
+              <div className="flex justify-between"><span>Tax (GST 18%)</span><span>₹{totals.tax}</span></div>
+              {totals.walletDiscount > 0 && (
+                <div className="flex justify-between text-green-600"><span>Wallet Discount</span><span>-₹{totals.walletDiscount}</span></div>
+              )}
+              <div className="flex justify-between text-lg font-bold pt-2 border-t"><span>Total</span><span>₹{totals.final}</span></div>
+            </div>
+
+            <div className="bg-gray-50 rounded-lg p-4 text-sm">
+              <p className="font-medium text-gray-900 mb-1 flex items-center">
+                {customer.deliveryType === 'pickup' ? <MapPin className="w-4 h-4 mr-1" /> : <Truck className="w-4 h-4 mr-1" />}
+                {customer.deliveryType === 'pickup' ? 'Store Pickup' : 'Home Delivery'}
+              </p>
+              <p className="text-gray-600">
+                {customer.deliveryType === 'pickup'
+                  ? 'Ready at our Keeranatham Road store. We will call you when ready.'
+                  : customer.address}
+              </p>
+            </div>
+
+            {pointsEarned > 0 && (
+              <div className="bg-yellow-50 rounded-lg p-3 text-sm text-yellow-800 flex items-center">
+                <Star className="w-4 h-4 mr-2" /> You earned {pointsEarned} reward points on this order!
+              </div>
+            )}
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2">
+              <Button onClick={printInvoice} variant="outline" className="w-full" data-testid="print-invoice-button">
+                <Printer className="w-4 h-4 mr-2" /> Print Invoice
+              </Button>
+              <Button onClick={shareOnWhatsApp} className="w-full bg-green-500 hover:bg-green-600" data-testid="whatsapp-share-button">
+                <Share2 className="w-4 h-4 mr-2" /> Share on WhatsApp
+              </Button>
+            </div>
+            <Button onClick={onClose} variant="ghost" className="w-full" data-testid="continue-shopping-button">
+              <Home className="w-4 h-4 mr-2" /> Continue Shopping
+            </Button>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   if (cartItems.length === 0) {
     return (

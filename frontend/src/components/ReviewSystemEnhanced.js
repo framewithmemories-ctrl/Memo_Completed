@@ -21,6 +21,8 @@ import {
   Award,
   Users,
   TrendingUp,
+  ExternalLink,
+  Pin,
   Loader2
 } from "lucide-react";
 
@@ -49,12 +51,29 @@ export const ReviewSystemEnhanced = () => {
     limit: 10,
     hasMore: true
   });
+  const [googleData, setGoogleData] = useState({
+    configured: false,
+    rating: 4.9,
+    total: 263,
+    google_url: 'https://www.google.com/maps/search/Memories+Photo+Frames+Coimbatore',
+    reviews: []
+  });
 
   // Load reviews from API on mount
   useEffect(() => {
     loadReviews();
     loadReviewStats();
+    loadGoogleReviews();
   }, []);
+
+  const loadGoogleReviews = async () => {
+    try {
+      const res = await axios.get(`${API}/google-reviews`);
+      setGoogleData(res.data);
+    } catch (error) {
+      console.error('Error loading Google reviews:', error);
+    }
+  };
 
   // Reload when filter changes
   useEffect(() => {
@@ -328,11 +347,47 @@ export const ReviewSystemEnhanced = () => {
         </div>
         
         <div className="text-center">
-          <div className="text-4xl font-bold text-green-600 mb-2">4.9★</div>
+          <div className="text-4xl font-bold text-green-600 mb-2">{Number(googleData.rating).toFixed(1)}★</div>
           <div className="text-gray-600 text-sm">Google Rating</div>
-          <div className="text-gray-500 text-xs">Based on 263+ reviews</div>
+          <div className="text-gray-500 text-xs mb-3">Based on {googleData.total}+ reviews</div>
+          <Button
+            variant="outline"
+            size="sm"
+            className="border-green-200 text-green-700 hover:bg-green-50"
+            onClick={() => window.open(googleData.google_url, '_blank')}
+            data-testid="read-all-google-reviews"
+          >
+            <ExternalLink className="w-4 h-4 mr-2" />
+            Read all reviews on Google
+          </Button>
         </div>
       </div>
+
+      {/* Live Google Reviews */}
+      {googleData.reviews && googleData.reviews.length > 0 && (
+        <div className="mb-8" data-testid="google-reviews-section">
+          <div className="flex items-center justify-between mb-4">
+            <h4 className="text-lg font-semibold text-gray-900 flex items-center">
+              <img src="https://www.google.com/favicon.ico" alt="Google" className="w-5 h-5 mr-2" />
+              Reviews from Google
+            </h4>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            {googleData.reviews.slice(0, 6).map((g, idx) => (
+              <Card key={idx} className="border-gray-200 bg-gray-50/50" data-testid="google-review-card">
+                <CardContent className="p-4 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="font-semibold text-gray-900 text-sm truncate">{g.author_name}</span>
+                    <div className="flex">{renderStars(g.rating)}</div>
+                  </div>
+                  <p className="text-gray-700 text-sm line-clamp-4">{g.text}</p>
+                  <p className="text-gray-400 text-xs">{g.relative_time}</p>
+                </CardContent>
+              </Card>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Filter */}
       <div className="flex items-center space-x-4 mb-6">
@@ -381,6 +436,11 @@ export const ReviewSystemEnhanced = () => {
                             <Badge variant="secondary" className="bg-green-100 text-green-800">
                               Verified Customer
                             </Badge>
+                            {review.pinned && (
+                              <Badge className="bg-rose-100 text-rose-700" data-testid="pinned-review-badge">
+                                <Pin className="w-3 h-3 mr-1" /> Featured
+                              </Badge>
+                            )}
                           </div>
                         </div>
                         <div className="text-sm text-gray-500">

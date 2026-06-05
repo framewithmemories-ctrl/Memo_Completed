@@ -38,7 +38,8 @@ import {
   Home,
   Wallet,
   Lock,
-  Unlock
+  Unlock,
+  Pin
 } from "lucide-react";
 
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
@@ -226,6 +227,16 @@ export const AdminPanel = () => {
       loadDashboardData(); // Refresh stats
     } catch (error) {
       handleApiError(error, 'Failed to update order status');
+    }
+  };
+
+  const pinReview = async (reviewId, pinned) => {
+    try {
+      await axios.put(`${API}/admin/reviews/${reviewId}/pin`, null, adminAuthConfig({ params: { pinned } }));
+      toast.success(pinned ? 'Review pinned (featured)!' : 'Review unpinned');
+      loadReviews();
+    } catch (error) {
+      handleApiError(error, 'Failed to update review');
     }
   };
 
@@ -684,6 +695,15 @@ export const AdminPanel = () => {
                                 <X className="w-4 h-4" />
                               </Button>
                             )}
+                            <Button
+                              size="sm"
+                              variant={review.pinned ? 'default' : 'outline'}
+                              onClick={() => pinReview(review.id, !review.pinned)}
+                              data-testid={`pin-review-${review.id}`}
+                              title={review.pinned ? 'Unpin' : 'Pin as featured'}
+                            >
+                              <Pin className="w-4 h-4" />
+                            </Button>
                             <Button
                               size="sm"
                               variant="destructive"

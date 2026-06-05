@@ -17,7 +17,8 @@ import {
   Gift,
   Sparkles,
   Users,
-  Truck
+  Truck,
+  ArrowLeft
 } from "lucide-react";
 
 const BusinessLogo = ({ size = "w-12 h-12" }) => {
@@ -63,6 +64,18 @@ const SmartCallButton = ({ className = "", children, phoneNumber = "+91814804014
 export const AboutUsPage = () => {
   return (
     <div className="min-h-screen bg-gradient-to-br from-rose-50 via-pink-50 to-orange-50">
+      {/* Back to Home */}
+      <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 pt-6">
+        <Button
+          variant="outline"
+          onClick={() => { window.location.href = '/'; }}
+          className="border-rose-200 text-rose-700 hover:bg-rose-50 bg-white/80"
+          data-testid="about-back-home-button"
+        >
+          <ArrowLeft className="w-4 h-4 mr-2" />
+          Back to Home
+        </Button>
+      </div>
       {/* Hero Section */}
       <section className="py-20">
         <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8">

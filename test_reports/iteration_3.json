@@ -1,0 +1,44 @@
+{
+  "summary": "Sprint 3 (checkout invoice + Google reviews + admin pin + About-us back + AI finder text + softer overlay) E2E PASSED. Backend pytest 59/59 (51 regression + 8 new). Frontend verified end-to-end: Add to Cart -> Cart -> Secure Checkout (single soft overlay, no 'void') -> Place Order -> Order Confirmation invoice screen rendered with order-id-badge 'Order #61DCE322', itemized bill (₹999/₹50/₹180/₹1229), Home Delivery + address, 36 reward points, and the 3 buttons Print Invoice / Share on WhatsApp / Continue Shopping all wired. Cart cleared after order (no count badge). Google reviews section + 3 google-review-card + 'Read all reviews on Google' button rendered from mock fallback. Storefront shows pinned review first with 'Featured' badge. About Us 'Back to Home' navigates to '/'. AI Gift Finder option buttons display full label + emoji on multi-line without truncation.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Console - home page", "issues": ["Pre-existing (already noted in iteration_2): repeated React 'Encountered two children with the same key' warnings on home page product/featured listing. Non-blocking. Likely duplicate IDs in featured products vs categories grid."]},
+      {"screen": "Console - all pages", "issues": ["Pre-existing 3rd-party warning 'Using UNSAFE_componentWillMount in strict mode' (from react-helmet or similar). Non-blocking."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_sprint3_orders_reviews_pin.py",
+    "/app/backend/tests/test_auth_and_admin.py",
+    "/app/backend/tests/test_wallet_photos_admin_crud.py",
+    "/app/test_reports/pytest/pytest_results.xml",
+    "/app/test_reports/pytest/pytest_results_sprint3.xml"
+  ],
+  "action_items": [
+    "(Pre-existing) Fix duplicate React keys on home product grids (Featured Products vs Categories share keys). Not introduced by this sprint.",
+    "(Nit) Read-all-google-reviews <a> has target=_blank but no rel='noopener noreferrer' verified - main agent should confirm to avoid window.opener security issue (not tested in this run)."
+  ],
+  "critical_code_review_comments": [
+    "POST /api/orders correctly computes points_earned = int(total_amount * 0.03) and updates user.points + tier; verified via /auth/me after order.",
+    "GET /api/google-reviews mock path returns configured=false with 3 reviews + google_url - correct graceful degradation when GOOGLE_PLACES_API_KEY/PLACE_ID empty (current state).",
+    "PUT /api/admin/reviews/{id}/pin requires admin token (401 without, 403 user token, 200 admin, 404 nonexistent). GET /api/reviews sorts pinned-first (verified - first listing entry has pinned=true after pin op).",
+    "Checkout overlay (dialog.jsx bg-black/60) renders as a single soft overlay; no double bg-black/50 observed in the open-overlay DOM scan during Add-to-Cart -> Checkout flow. 'Cart disappears into void' bug FIXED.",
+    "EnhancedCheckoutPage useAuth import (previously missing per agent context) - confirmed working: order POST succeeds for guest user (no token) and persists to backend with user_id passed through.",
+    "AI Gift Finder option buttons now wrap (whitespace-normal) - labels like 'Wedding Celebration', 'Graduation Achievement', 'Corporate Event' render fully without cut-off in the dialog.",
+    "(Pre-existing, raised in iteration_2) server.py is now 1427 lines (was 1352). Continues to grow - recommend splitting into routers."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_sprint3_orders_reviews_pin.py (new - 8 tests)",
+    "/app/test_reports/pytest/pytest_results.xml (regenerated)",
+    "/app/test_reports/pytest/pytest_results_sprint3.xml (new)"
+  ],
+  "success_rate": {"backend": "100% (59/59; one flaky photo-use 'connect timeout' on full-suite run passed on retry)", "frontend": "100% on sprint scope (checkout invoice, google reviews mock, About back, AI finder text, soft overlay, pinned-first Featured badge)"},
+  "test_credentials": "Admin: admin / memories2024. Order placed as guest with name='TEST Sprint3 User', email='sprint3_e2e@example.com'. Backend created several TEST_sprint3_*@example.com users.",
+  "seed_data_creation": "Created (a) TEST_sprint3_<uuid>@example.com user with one order (Order #61DCE322, total ₹1229, points 36) and one TEST pin review (toggled pinned=true then false). (b) Frontend test order from guest flow persists in /api/orders/<user_id>. Safe to leave for next iteration.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Run `pytest /app/backend/tests/ -v --junitxml=/app/test_reports/pytest/pytest_results.xml` -> 59 should pass (test_use_photo_for_order is occasionally network-flaky; rerun once). Sprint 3 endpoints: POST /api/orders (OrderCreate schema requires user_id, items, total_amount, delivery_type, optional delivery_address dict), GET /api/orders/{user_id}, GET /api/google-reviews (returns mock w/ configured=false until GOOGLE_PLACES_API_KEY+GOOGLE_PLACE_ID env injected), PUT /api/admin/reviews/{id}/pin?pinned=<bool>. Frontend E2E: cart icon directly opens Secure Checkout modal (no intermediate 'Checkout' button - the cart drawer was previously the issue, now it goes straight to checkout). Selectors: data-testid='order-confirmation', 'order-id-badge', 'print-invoice-button', 'whatsapp-share-button', 'continue-shopping-button', 'google-reviews-section', 'google-review-card', 'read-all-google-reviews', 'about-back-home-button', 'pinned-review-badge'. Wallet checkout path (logged-in 'Use wallet balance' option reducing total + debiting wallet) was NOT exercised via UI in this iteration; main agent should self-verify or request a follow-up. Backend wallet endpoints are unchanged and remain green via test_wallet_photos_admin_crud.py.",
+  "rca_of_the_issue": "No new bugs found. Pre-existing duplicate React key warnings on home product grid remain (carried from iteration_2 - not in sprint 3 scope)."
+}

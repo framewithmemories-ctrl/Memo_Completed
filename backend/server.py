@@ -3,6 +3,7 @@ from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
 import os
+import httpx
 import logging
 from pathlib import Path
 from pydantic import BaseModel, Field
@@ -137,6 +138,7 @@ class Review(BaseModel):
     photos: Optional[List[str]] = []
     product_id: Optional[str] = None
     approved: bool = False
+    pinned: bool = False
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 class ReviewCreate(BaseModel):
@@ -723,8 +725,8 @@ async def get_reviews(
         # Get total count
         total_count = await db.reviews.count_documents(filter_query)
         
-        # Get reviews with pagination, sorted by newest first
-        reviews = await db.reviews.find(filter_query).sort("created_at", -1).skip(offset).limit(limit).to_list(limit)
+        # Get reviews with pagination, pinned first then newest
+        reviews = await db.reviews.find(filter_query).sort([("pinned", -1), ("created_at", -1)]).skip(offset).limit(limit).to_list(limit)
         
         # Calculate rating statistics
         all_reviews = await db.reviews.find({"approved": True}).to_list(1000)
@@ -749,9 +751,82 @@ async def get_reviews(
     except Exception:
         raise HTTPException(status_code=500, detail="Failed to fetch reviews")
 
+@api_router.get("/google-reviews")
+async def google_reviews():
+    """Live Google reviews (top ~5) via Places API, with graceful mock fallback when not configured."""
+    api_key = os.environ.get("GOOGLE_PLACES_API_KEY", "").strip()
+    place_id = os.environ.get("GOOGLE_PLACE_ID", "").strip()
+    google_url = os.environ.get("GOOGLE_REVIEWS_URL", "").strip()
+    if not google_url:
+        google_url = (
+            f"https://search.google.com/local/reviews?placeid={place_id}"
+            if place_id else "https://www.google.com/maps/search/Memories+Photo+Frames+Coimbatore"
+        )
+
+    mock = {
+        "configured": False,
+        "rating": 4.9,
+        "total": 263,
+        "google_url": google_url,
+        "reviews": [
+            {"author_name": "Anitha R", "rating": 5, "text": "Beautiful photo frames and excellent service. Highly recommend Memories for gifts!", "relative_time": "2 weeks ago", "profile_photo_url": ""},
+            {"author_name": "Karthik S", "rating": 5, "text": "Got customized acrylic frames for my parents' anniversary. The quality is top notch.", "relative_time": "1 month ago", "profile_photo_url": ""},
+            {"author_name": "Deepa M", "rating": 5, "text": "Friendly staff and quick delivery. The LED frame looks stunning at home.", "relative_time": "1 month ago", "profile_photo_url": ""},
+        ],
+    }
+
+    if not api_key or not place_id:
+        return mock
+
+    try:
+        async with httpx.AsyncClient(timeout=10) as http_client:
+            resp = await http_client.get(
+                "https://maps.googleapis.com/maps/api/place/details/json",
+                params={
+                    "place_id": place_id,
+                    "fields": "rating,user_ratings_total,reviews,url",
+                    "reviews_sort": "newest",
+                    "key": api_key,
+                },
+            )
+        data = resp.json()
+        if data.get("status") != "OK":
+            logger.error(f"Google Places API status: {data.get('status')} {data.get('error_message','')}")
+            return {**mock, "error": data.get("status")}
+        result = data.get("result", {})
+        reviews = [
+            {
+                "author_name": r.get("author_name"),
+                "rating": r.get("rating"),
+                "text": r.get("text"),
+                "relative_time": r.get("relative_time_description"),
+                "profile_photo_url": r.get("profile_photo_url", ""),
+            }
+            for r in result.get("reviews", [])
+        ]
+        return {
+            "configured": True,
+            "rating": result.get("rating", 0),
+            "total": result.get("user_ratings_total", 0),
+            "google_url": result.get("url", google_url),
+            "reviews": reviews,
+        }
+    except Exception as e:
+        logger.error(f"Google reviews fetch error: {e}")
+        return {**mock, "error": "fetch_failed"}
+
+
+@api_router.put("/admin/reviews/{review_id}/pin")
+async def pin_review(review_id: str, pinned: bool, admin=Depends(require_admin)):
+    """Pin/unpin a review so it appears first (admin-curated)."""
+    result = await db.reviews.update_one({"id": review_id}, {"$set": {"pinned": pinned}})
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Review not found")
+    return {"success": True, "pinned": pinned}
+
+
 @api_router.get("/reviews/stats")
 async def get_review_stats():
-    """Get review statistics for display"""
     try:
         all_reviews = await db.reviews.find({"approved": True}).to_list(1000)
         

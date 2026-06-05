@@ -684,7 +684,7 @@ export const EnhancedAIGiftFinder = () => {
                             <Button
                               key={option.value}
                               variant="outline"
-                              className="h-auto p-6 text-left border-purple-200 hover:border-purple-400 hover:bg-purple-50 transition-all group"
+                              className="h-auto p-6 text-left whitespace-normal border-purple-200 hover:border-purple-400 hover:bg-purple-50 transition-all group"
                               onClick={() => handleAnswer(questions[currentStep].id, option.value)}
                             >
                               <div className="flex items-center space-x-4 w-full">
