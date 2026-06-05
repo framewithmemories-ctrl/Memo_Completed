@@ -46,7 +46,7 @@ const OrdersTab = ({ userId }) => {
   if (orders.length === 0) {
     return (
       <Card>
-        <CardContent className="text-center py-10">
+        <CardContent className="text-center py-10" data-testid="orders-empty">
           <Package className="w-14 h-14 text-gray-300 mx-auto mb-3" />
           <h3 className="text-lg font-semibold text-gray-900 mb-1">No orders yet</h3>
           <p className="text-gray-500 text-sm">Your placed orders will appear here.</p>

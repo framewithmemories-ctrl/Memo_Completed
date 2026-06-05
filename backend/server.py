@@ -1127,7 +1127,7 @@ async def get_admin_stats(admin=Depends(require_admin)):
         raise HTTPException(status_code=500, detail="Failed to fetch admin statistics")
 
 @api_router.get("/admin/reviews")
-async def get_admin_reviews(status: str = "all", limit: int = 50):
+async def get_admin_reviews(status: str = "all", limit: int = 50, admin=Depends(require_admin)):
     """Get reviews for admin management"""
     try:
         filter_query = {}

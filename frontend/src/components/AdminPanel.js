@@ -339,7 +339,14 @@ export const AdminPanel = () => {
       </header>
 
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        <Tabs value={activeTab} onValueChange={setActiveTab}>
+        <Tabs value={activeTab} onValueChange={(tab) => {
+          setActiveTab(tab);
+          if (tab === 'orders') loadOrders();
+          else if (tab === 'reviews') loadReviews('all');
+          else if (tab === 'users') loadUsers();
+          else if (tab === 'products') loadProducts();
+          else if (tab === 'dashboard') loadDashboardData();
+        }}>
           <TabsList className="grid w-full grid-cols-6">
             <TabsTrigger value="dashboard" className="flex items-center">
               <BarChart3 className="w-4 h-4 mr-2" />
@@ -503,7 +510,7 @@ export const AdminPanel = () => {
               <CardHeader>
                 <div className="flex items-center justify-between">
                   <CardTitle>Order Management</CardTitle>
-                  <Button onClick={loadOrders}>
+                  <Button onClick={() => loadOrders()}>
                     <RefreshCw className="w-4 h-4 mr-2" />
                     Refresh
                   </Button>
@@ -679,7 +686,7 @@ export const AdminPanel = () => {
               <CardHeader>
                 <div className="flex items-center justify-between">
                   <CardTitle>User Management</CardTitle>
-                  <Button onClick={loadUsers}>
+                  <Button onClick={() => loadUsers()}>
                     <RefreshCw className="w-4 h-4 mr-2" />
                     Refresh Users
                   </Button>
