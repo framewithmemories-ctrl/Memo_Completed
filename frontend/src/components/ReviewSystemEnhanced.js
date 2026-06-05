@@ -354,7 +354,7 @@ export const ReviewSystemEnhanced = () => {
             variant="outline"
             size="sm"
             className="border-green-200 text-green-700 hover:bg-green-50"
-            onClick={() => window.open(googleData.google_url, '_blank')}
+            onClick={() => window.open(googleData.google_url, '_blank', 'noopener,noreferrer')}
             data-testid="read-all-google-reviews"
           >
             <ExternalLink className="w-4 h-4 mr-2" />

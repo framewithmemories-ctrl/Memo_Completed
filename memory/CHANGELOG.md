@@ -17,8 +17,21 @@
 - Admin product CRUD: POST /api/admin/products (create) + PUT (edit, matched_count fix) + DELETE. UI: Add Product / Edit / Delete dialogs in Admin Products tab.
 
 ## Remaining (next batch)
-- P1: Post-checkout invoice/bill screen (order number, itemized bill, totals, delivery) with Print + WhatsApp share.
-- P1: Cart page layout fix (not fully visible; "cart disappears into void" before order render).
-- UI: fix overly-dark black hover states; AI Analyzer details cut off; "Back to Home" on About Us page.
-- Reviews: hybrid Google reviews (live Google Places API top ~5 + "Read all on Google" button + admin-curated/pinned fallback). NEEDS Google Cloud API key + Place ID from user.
+- Reviews: inject live Google credentials (see "Google Reviews Setup" below).
 - P2: password reset, real "Top Products" analytics.
+- Pre-existing (non-blocking): duplicate React `key` warning on home product grid; react-helmet UNSAFE_componentWillMount warning.
+
+### Sprint: Batch 2 — Checkout Invoice + UI fixes (tested, 59/59)
+- Post-checkout INVOICE screen: order id, itemized bill, subtotal/delivery/tax/total, delivery info, reward points, with **Print Invoice** (isolated print window) + **Share on WhatsApp** (wa.me with order summary) + Continue Shopping.
+- Orders now PERSIST to backend (POST /api/orders) and show in Account → Orders; logged-in wallet pay debits backend wallet.
+- Cart "void" fixed: removed redundant double `bg-black` overlay in CartIcon; softened all dialog overlays (black/80 → black/60).
+- Hybrid Google reviews: GET /api/google-reviews (httpx + MOCK fallback) + "Read all reviews on Google" button + admin-curated PINNED reviews (Review.pinned, admin pin endpoint, pinned-first sort, "Featured" badge).
+- About Us "Back to Home" button.
+- AI Gift Finder option text no longer cut off (whitespace-normal).
+
+## Google Reviews Setup (action for user)
+Inject into /app/backend/.env then `sudo supervisorctl restart backend`:
+- GOOGLE_PLACES_API_KEY="<your Google Cloud API key with Places API enabled>"
+- GOOGLE_PLACE_ID="<your business Place ID>"
+- GOOGLE_REVIEWS_URL="<optional: direct link to your Google reviews>"
+When set, /api/google-reviews returns configured=true with live top-5 reviews; otherwise it serves mock data.
