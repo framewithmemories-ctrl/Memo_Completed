@@ -751,6 +751,15 @@ async def get_reviews(
     except Exception:
         raise HTTPException(status_code=500, detail="Failed to fetch reviews")
 
+@api_router.get("/config")
+async def get_public_config():
+    """Public, non-secret config for the frontend (e.g. shop WhatsApp number)."""
+    return {
+        "shop_whatsapp": os.environ.get("SHOP_WHATSAPP_NUMBER", "918148040148"),
+        "business_name": "Memories",
+    }
+
+
 @api_router.get("/google-reviews")
 async def google_reviews():
     """Live Google reviews (top ~5) via Places API, with graceful mock fallback when not configured."""
@@ -1148,13 +1157,16 @@ async def enrich_orders(orders: List[dict]) -> List[dict]:
     users = await db.users.find({"id": {"$in": user_ids}}).to_list(1000) if user_ids else []
     name_map = {u["id"]: u.get("name", "Guest") for u in users}
     email_map = {u["id"]: u.get("email", "") for u in users}
+    phone_map = {u["id"]: u.get("phone", "") for u in users}
     result = []
     for o in orders:
         oo = Order(**o).dict()
         oo["total"] = oo.get("total_amount", 0)
+        addr = oo.get("delivery_address") or {}
         oo["customer"] = {
-            "name": name_map.get(o.get("user_id"), "Guest"),
-            "email": email_map.get(o.get("user_id"), ""),
+            "name": addr.get("name") or name_map.get(o.get("user_id"), "Guest"),
+            "email": addr.get("email") or email_map.get(o.get("user_id"), ""),
+            "phone": addr.get("phone") or phone_map.get(o.get("user_id"), ""),
         }
         result.append(oo)
     return result
@@ -1197,12 +1209,18 @@ async def get_admin_stats(admin=Depends(require_admin)):
         recent_orders_docs = await db.orders.find({}).sort("created_at", -1).limit(10).to_list(10)
         recent_orders = await enrich_orders(recent_orders_docs)
         
-        # Get top products (simplified)
-        top_products = [
-            {"name": "Classic Wooden Frame", "sales": 45, "revenue": 40455},
-            {"name": "Modern Acrylic Frame", "sales": 32, "revenue": 38400},
-            {"name": "Custom Photo Mug", "sales": 28, "revenue": 9772},
-        ]
+        # Top products by real sales (aggregated from order items)
+        product_agg = {}
+        for order in orders:
+            for item in order.get("items", []):
+                name = item.get("name", "Unknown")
+                qty = item.get("quantity", 1) or 1
+                price = item.get("price", 0) or 0
+                if name not in product_agg:
+                    product_agg[name] = {"name": name, "sales": 0, "revenue": 0}
+                product_agg[name]["sales"] += qty
+                product_agg[name]["revenue"] += price * qty
+        top_products = sorted(product_agg.values(), key=lambda p: p["revenue"], reverse=True)[:5]
         
         return {
             "total_users": total_users,

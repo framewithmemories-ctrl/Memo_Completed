@@ -1,0 +1,28 @@
+version: "3.9"
+
+services:
+  mongo:
+    image: mongo:7
+    restart: unless-stopped
+    volumes:
+      - mongo_data:/data/db
+    # Expose only if you need external DB access; otherwise keep internal
+    ports:
+      - "27017:27017"
+
+  backend:
+    build: ./backend
+    restart: unless-stopped
+    env_file:
+      - ./backend/.env
+    environment:
+      # Override so the backend talks to the mongo service (not localhost)
+      - MONGO_URL=mongodb://mongo:27017
+      - DB_NAME=memories
+    depends_on:
+      - mongo
+    ports:
+      - "8001:8001"
+
+volumes:
+  mongo_data:

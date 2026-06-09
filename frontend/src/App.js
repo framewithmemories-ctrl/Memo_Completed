@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { Helmet } from "react-helmet";
+import { Helmet, HelmetProvider } from "react-helmet-async";
 import "./App.css";
 import { BrowserRouter, Routes, Route } from "react-router-dom";
 import axios from "axios";
@@ -246,7 +246,7 @@ const Header = () => {
               </div>
             </div>
             
-            <nav className="hidden md:flex space-x-6">
+            <nav className="hidden md:flex space-x-4 lg:space-x-6 whitespace-nowrap">
               <a href="#home" className="text-gray-700 hover:text-rose-600 font-medium transition-colors relative group">
                 Home
                 <span className="absolute -bottom-1 left-0 w-0 h-0.5 bg-rose-600 transition-all group-hover:w-full"></span>
@@ -270,12 +270,12 @@ const Header = () => {
             </nav>
           </div>
           
-          <div className="flex items-center space-x-4">
-            <div className="hidden sm:block">
+          <div className="flex items-center space-x-3 lg:space-x-4">
+            <div className="hidden 2xl:block w-56">
               <SearchComponent />
             </div>
             
-            <Badge variant="secondary" className="bg-rose-100 text-rose-800 hidden sm:flex animate-pulse">
+            <Badge variant="secondary" className="bg-rose-100 text-rose-800 hover:bg-rose-100 hidden 2xl:flex animate-pulse">
               <Gift className="w-3 h-3 mr-1" />
               Free Gift Wrap
             </Badge>
@@ -283,7 +283,7 @@ const Header = () => {
             <AccountButton />
             <CartIcon />
             
-            <SmartCallButton className="bg-gradient-to-r from-rose-500 to-pink-500 hover:from-rose-600 hover:to-pink-600 text-white hidden sm:flex">
+            <SmartCallButton className="bg-gradient-to-r from-rose-500 to-pink-500 hover:from-rose-600 hover:to-pink-600 text-white hidden lg:flex">
               <Phone className="w-4 h-4 mr-2" />
               Call Now
             </SmartCallButton>
@@ -1102,19 +1102,21 @@ const Home = () => {
 
 function App() {
   return (
-    <AuthProvider>
-      <CartProvider>
-        <div className="App">
-          <BrowserRouter>
-            <Routes>
-              <Route path="/" element={<Home />} />
-              <Route path="/about" element={<AboutUsPage />} />
-              <Route path="/admin" element={<AdminPanel />} />
-            </Routes>
-          </BrowserRouter>
-        </div>
-      </CartProvider>
-    </AuthProvider>
+    <HelmetProvider>
+      <AuthProvider>
+        <CartProvider>
+          <div className="App">
+            <BrowserRouter>
+              <Routes>
+                <Route path="/" element={<Home />} />
+                <Route path="/about" element={<AboutUsPage />} />
+                <Route path="/admin" element={<AdminPanel />} />
+              </Routes>
+            </BrowserRouter>
+          </div>
+        </CartProvider>
+      </AuthProvider>
+    </HelmetProvider>
   );
 }
 

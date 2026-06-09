@@ -112,11 +112,11 @@ export const HeroSection = () => {
           <div className="space-y-8 animate-fadeInUp">
             <div className="space-y-6">
               <div className="flex items-center space-x-3">
-                <Badge className="bg-rose-100 text-rose-800 border-rose-200 animate-pulse">
+                <Badge className="bg-rose-100 text-rose-800 border-rose-200 hover:bg-rose-100 animate-pulse">
                   <Sparkles className="w-3 h-3 mr-1" />
                   Since 2020 - Trusted by 1000+ Customers
                 </Badge>
-                <Badge className="bg-green-100 text-green-800 border-green-200">
+                <Badge className="bg-green-100 text-green-800 border-green-200 hover:bg-green-100">
                   <CheckCircle className="w-3 h-3 mr-1" />
                   4.9★ Google Rating
                 </Badge>
@@ -510,8 +510,8 @@ export const ProductGrid = ({ products }) => {
         </div>
         
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-8">
-          {filteredProducts.map((product) => (
-            <Card key={product.id} className="group hover:shadow-2xl transition-all duration-300 border-rose-100 hover:border-rose-200 overflow-hidden transform hover:scale-105">
+          {filteredProducts.map((product, index) => (
+            <Card key={`${product.id}-${index}`} className="group hover:shadow-2xl transition-all duration-300 border-rose-100 hover:border-rose-200 overflow-hidden transform hover:scale-105">
               <div className="relative overflow-hidden">
                 <img 
                   src={product.image_url}

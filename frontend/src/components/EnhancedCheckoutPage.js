@@ -52,6 +52,11 @@ export const EnhancedCheckoutPage = ({ onClose }) => {
   const [useWalletBalance, setUseWalletBalance] = useState(false);
   const [showLiveUpdates, setShowLiveUpdates] = useState(true);
   const [placedOrder, setPlacedOrder] = useState(null);
+  const [shopWhatsapp, setShopWhatsapp] = useState('918148040148');
+
+  useEffect(() => {
+    axios.get(`${API}/config`).then((r) => setShopWhatsapp(r.data.shop_whatsapp)).catch(() => {});
+  }, []);
 
   // Load user profile (auth) and wallet (backend) on mount
   useEffect(() => {
@@ -211,10 +216,13 @@ export const EnhancedCheckoutPage = ({ onClose }) => {
         })),
         total_amount: totals.final,
         delivery_type: formData.deliveryType,
-        delivery_address:
-          formData.deliveryType === 'delivery'
-            ? { address: formData.address, instructions: formData.instructions }
-            : null,
+        delivery_address: {
+          name: formData.name,
+          phone: formData.phone,
+          email: formData.email,
+          address: formData.deliveryType === 'delivery' ? formData.address : '',
+          instructions: formData.instructions,
+        },
       };
 
       const res = await axios.post(`${API}/orders`, orderPayload);
@@ -278,7 +286,7 @@ export const EnhancedCheckoutPage = ({ onClose }) => {
       `${customer.deliveryType === 'pickup' ? 'Store Pickup at Keeranatham Road' : 'Delivery to: ' + customer.address}`,
     ].filter(Boolean);
     const text = encodeURIComponent(lines.join('\n'));
-    window.open(`https://wa.me/918148040148?text=${text}`, '_blank');
+    window.open(`https://wa.me/${shopWhatsapp}?text=${text}`, '_blank', 'noopener,noreferrer');
   };
 
   // Print the invoice in an isolated window
@@ -386,7 +394,7 @@ export const EnhancedCheckoutPage = ({ onClose }) => {
                 <Printer className="w-4 h-4 mr-2" /> Print Invoice
               </Button>
               <Button onClick={shareOnWhatsApp} className="w-full bg-green-500 hover:bg-green-600" data-testid="whatsapp-share-button">
-                <Share2 className="w-4 h-4 mr-2" /> Share on WhatsApp
+                <Share2 className="w-4 h-4 mr-2" /> Send Order to Shop
               </Button>
             </div>
             <Button onClick={onClose} variant="ghost" className="w-full" data-testid="continue-shopping-button">

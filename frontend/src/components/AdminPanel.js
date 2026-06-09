@@ -39,7 +39,8 @@ import {
   Wallet,
   Lock,
   Unlock,
-  Pin
+  Pin,
+  MessageCircle
 } from "lucide-react";
 
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
@@ -92,6 +93,27 @@ export const AdminPanel = () => {
   // Product create/edit dialog
   const [productDialog, setProductDialog] = useState({ open: false, mode: 'create', id: null });
   const [productForm, setProductForm] = useState({ name: '', description: '', category: 'frames', base_price: '', image_url: '' });
+
+  // Public config (shop WhatsApp number)
+  const [shopWhatsapp, setShopWhatsapp] = useState('918148040148');
+  useEffect(() => {
+    axios.get(`${API}/config`).then((r) => setShopWhatsapp(r.data.shop_whatsapp)).catch(() => {});
+  }, []);
+
+  const messageCustomerStatus = (order) => {
+    const phone = (order.customer?.phone || '').replace(/[^0-9]/g, '');
+    if (!phone) {
+      toast.error('No phone number on file for this customer');
+      return;
+    }
+    const waPhone = phone.length === 10 ? `91${phone}` : phone;
+    const text = encodeURIComponent(
+      `Hello ${order.customer?.name || ''}, this is Memories Photo Frames. ` +
+      `Your order #${order.id.substring(0, 8).toUpperCase()} (₹${order.total}) is now *${order.status}*. ` +
+      `Thank you for shopping with us!`
+    );
+    window.open(`https://wa.me/${waPhone}?text=${text}`, '_blank', 'noopener,noreferrer');
+  };
 
   // Check if already authenticated on load
   useEffect(() => {
@@ -617,17 +639,30 @@ export const AdminPanel = () => {
                             </Badge>
                           </td>
                           <td className="p-2">
-                            <select
-                              value={order.status}
-                              onChange={(e) => updateOrderStatus(order.id, e.target.value)}
-                              className="text-sm border rounded px-2 py-1"
-                            >
-                              <option value="pending">Pending</option>
-                              <option value="processing">Processing</option>
-                              <option value="completed">Completed</option>
-                              <option value="cancelled">Cancelled</option>
-                              <option value="refunded">Refunded</option>
-                            </select>
+                            <div className="flex items-center space-x-2">
+                              <select
+                                value={order.status}
+                                onChange={(e) => updateOrderStatus(order.id, e.target.value)}
+                                className="text-sm border rounded px-2 py-1"
+                              >
+                                <option value="pending">Pending</option>
+                                <option value="processing">Processing</option>
+                                <option value="completed">Completed</option>
+                                <option value="cancelled">Cancelled</option>
+                                <option value="refunded">Refunded</option>
+                              </select>
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                disabled={!order.customer?.phone}
+                                title={order.customer?.phone ? 'Message customer order status on WhatsApp' : 'No phone on file'}
+                                onClick={() => messageCustomerStatus(order)}
+                                data-testid={`order-whatsapp-${order.id}`}
+                                className="text-green-700 border-green-200 hover:bg-green-50"
+                              >
+                                <MessageCircle className="w-4 h-4" />
+                              </Button>
+                            </div>
                           </td>
                         </tr>
                       ))}
