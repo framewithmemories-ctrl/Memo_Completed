@@ -1,4 +1,3 @@
-/* eslint-disable react-hooks/immutability, react-hooks/set-state-in-effect */
 import React, { useState, useEffect } from 'react';
 import { Button } from "./ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "./ui/card";

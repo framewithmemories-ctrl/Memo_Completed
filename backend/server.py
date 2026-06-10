@@ -14,6 +14,8 @@ import jwt as pyjwt
 import bcrypt
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 import json
+import secrets
+import string
 from gemini_helper import gemini_generate, gemini_available
 import base64
 import io
@@ -1402,6 +1404,71 @@ async def admin_adjust_wallet(user_id: str, req: WalletAdjustRequest, admin=Depe
     )
     await db.wallet_transactions.insert_one(transaction.dict())
     return {"success": True, "new_balance": new_balance, "transaction_id": transaction.id}
+
+
+class AdminPasswordResetRequest(BaseModel):
+    new_password: Optional[str] = None  # if omitted, a secure temporary password is generated
+    reason: Optional[str] = None
+
+
+def _generate_temp_password(length: int = 12) -> str:
+    alphabet = string.ascii_letters + string.digits
+    return "".join(secrets.choice(alphabet) for _ in range(length))
+
+
+@api_router.post("/admin/users/{user_id}/reset-password")
+async def admin_reset_user_password(user_id: str, req: AdminPasswordResetRequest, admin=Depends(require_admin)):
+    """Admin-initiated password reset (no email channel).
+    If new_password is provided it is set directly; otherwise a secure temporary
+    password is generated and returned to the admin to share with the user.
+    Every reset is recorded in admin_audit_log."""
+    user = await db.users.find_one({"id": user_id})
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    generated = False
+    if req.new_password:
+        new_password = req.new_password
+        if len(new_password) < 6:
+            raise HTTPException(status_code=400, detail="Password must be at least 6 characters")
+        if len(new_password.encode("utf-8")) > 72:
+            raise HTTPException(status_code=400, detail="Password must be 72 bytes or fewer")
+    else:
+        new_password = _generate_temp_password()
+        generated = True
+
+    await db.users.update_one(
+        {"id": user_id},
+        {"$set": {"password_hash": hash_password(new_password), "password_reset_at": datetime.now(timezone.utc).isoformat()}},
+    )
+
+    audit_entry = {
+        "id": str(uuid.uuid4()),
+        "action": "password_reset",
+        "actor": admin.get("sub") or admin.get("username") or "admin",
+        "target_user_id": user_id,
+        "target_user_email": user.get("email", ""),
+        "generated": generated,
+        "reason": (req.reason or "").strip(),
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    await db.admin_audit_log.insert_one(audit_entry)
+
+    return {
+        "success": True,
+        "generated": generated,
+        # temporary password is only returned when auto-generated, so the admin can relay it
+        "temporary_password": new_password if generated else None,
+        "message": "Password reset successfully. Share the temporary password with the user." if generated
+        else "Password updated successfully.",
+    }
+
+
+@api_router.get("/admin/audit-log")
+async def get_admin_audit_log(limit: int = 50, admin=Depends(require_admin)):
+    """Recent admin audit entries (most recent first)."""
+    entries = await db.admin_audit_log.find({}, {"_id": 0}).sort("created_at", -1).limit(limit).to_list(limit)
+    return {"entries": entries}
 
 
 @api_router.post("/admin/products", response_model=Product)

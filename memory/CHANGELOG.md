@@ -2,6 +2,15 @@
 
 ## June 2026
 
+### Sprint: Build fix + Admin Password Reset (tested e2e)
+- Fixed P0 build blocker: the function `usePhotoForOrder` in ProfilePhotoStorage.js (a plain handler, not a hook) tripped ESLint rules-of-hooks → renamed to `applyPhotoToOrder`.
+- Removed broken `/app/frontend/.eslintrc.json` (extended `react-app`, which isn't installed → "Failed to load config" build error). react-scripts 5 already bundles its own eslint config.
+- Removed file-level `/* eslint-disable react-hooks/immutability, react-hooks/set-state-in-effect */` comments across 10 files — those rules don't exist in bundled react-hooks 4.x and caused "Definition for rule was not found" errors. Kept valid `react/no-unescaped-entities` disables in App.js & EnhancedCheckoutPage.js.
+- Verified no React duplicate-`key` warnings fire at runtime (all `.map()` renders are keyed).
+- NEW Admin-initiated password reset (option a, no email dependency): `POST /api/admin/users/{id}/reset-password` (set specific or auto-generate temp pwd) + `GET /api/admin/audit-log`. Admin UI: Users tab → "Reset Password" dialog with copy-to-clipboard. Confirmed e2e: generated temp password successfully logs the user in.
+
+## June 2026
+
 ### Sprint: Auth + Admin Panel (tested, 27/27)
 - JWT auth (bcrypt + PyJWT) for users (register/login/me) and admin (seeded admin/memories2024).
 - All /api/admin/* protected with require_admin (401 no token, 403 user token).

@@ -1,4 +1,3 @@
-/* eslint-disable react-hooks/immutability, react-hooks/set-state-in-effect */
 import React, { useState, useEffect, useRef } from 'react';
 import axios from 'axios';
 import { Button } from "./ui/button";
@@ -134,7 +133,7 @@ export const ProfilePhotoStorage = ({ userId, onPhotoSelected }) => {
     }
   };
 
-  const usePhotoForOrder = async (photo) => {
+  const applyPhotoToOrder = async (photo) => {
     try {
       await axios.put(`${API}/users/${userId}/photos/${photo.id}/use`);
     } catch (error) {
@@ -303,7 +302,7 @@ export const ProfilePhotoStorage = ({ userId, onPhotoSelected }) => {
                           <Button
                             size="sm"
                             variant="secondary"
-                            onClick={() => usePhotoForOrder(photo)}
+                            onClick={() => applyPhotoToOrder(photo)}
                           >
                             <Plus className="w-3 h-3" />
                           </Button>
@@ -370,7 +369,7 @@ export const ProfilePhotoStorage = ({ userId, onPhotoSelected }) => {
                       </div>
                     </div>
                     <div className="flex space-x-2">
-                      <Button size="sm" variant="outline" onClick={() => usePhotoForOrder(photo)}>
+                      <Button size="sm" variant="outline" onClick={() => applyPhotoToOrder(photo)}>
                         Use
                       </Button>
                       <Button size="sm" variant="ghost" onClick={() => setSelectedPhoto(photo)}>
@@ -446,7 +445,7 @@ export const ProfilePhotoStorage = ({ userId, onPhotoSelected }) => {
               
               <div className="flex flex-col sm:flex-row gap-3">
                 <Button
-                  onClick={() => usePhotoForOrder(selectedPhoto)}
+                  onClick={() => applyPhotoToOrder(selectedPhoto)}
                   className="flex-1 bg-gradient-to-r from-green-500 to-emerald-500 hover:from-green-600 hover:to-emerald-600"
                 >
                   <Plus className="w-4 h-4 mr-2" />

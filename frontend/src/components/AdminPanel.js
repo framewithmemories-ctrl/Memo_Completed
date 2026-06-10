@@ -1,4 +1,3 @@
-/* eslint-disable react-hooks/immutability, react-hooks/set-state-in-effect */
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 import { Button } from "./ui/button";
@@ -42,7 +41,9 @@ import {
   Unlock,
   Pin,
   MessageCircle,
-  Sparkles
+  Sparkles,
+  KeyRound,
+  Copy
 } from "lucide-react";
 
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
@@ -91,6 +92,11 @@ export const AdminPanel = () => {
   // Wallet adjust dialog
   const [walletUser, setWalletUser] = useState(null);
   const [walletForm, setWalletForm] = useState({ amount: '', type: 'credit', reason: '' });
+
+  // Password reset dialog
+  const [resetUser, setResetUser] = useState(null);
+  const [resetForm, setResetForm] = useState({ new_password: '', reason: '' });
+  const [resetResult, setResetResult] = useState(null);
 
   // Product create/edit dialog
   const [productDialog, setProductDialog] = useState({ open: false, mode: 'create', id: null });
@@ -306,6 +312,27 @@ export const AdminPanel = () => {
       loadUsers();
     } catch (error) {
       handleApiError(error, 'Failed to adjust wallet');
+    }
+  };
+
+  const submitPasswordReset = async () => {
+    const pwd = resetForm.new_password.trim();
+    if (pwd && pwd.length < 6) { toast.error('Password must be at least 6 characters'); return; }
+    try {
+      const res = await axios.post(`${API}/admin/users/${resetUser.id}/reset-password`, {
+        new_password: pwd || null,
+        reason: resetForm.reason.trim() || null,
+      }, adminAuthConfig());
+      if (res.data.generated) {
+        setResetResult(res.data.temporary_password);
+        toast.success('Temporary password generated');
+      } else {
+        toast.success('Password updated successfully');
+        setResetUser(null);
+        setResetForm({ new_password: '', reason: '' });
+      }
+    } catch (error) {
+      handleApiError(error, 'Failed to reset password');
     }
   };
 
@@ -859,10 +886,16 @@ export const AdminPanel = () => {
                           <td className="p-2">₹{user.total_spent || 0}</td>
                           <td className="p-2">{new Date(user.created_at).toLocaleDateString()}</td>
                           <td className="p-2">
-                            <Button size="sm" variant="outline" onClick={() => { setWalletUser(user); setWalletForm({ amount: '', type: 'credit', reason: '' }); }} data-testid={`adjust-wallet-${user.id}`}>
-                              <Wallet className="w-4 h-4 mr-1" />
-                              Adjust Wallet
-                            </Button>
+                            <div className="flex flex-wrap gap-2">
+                              <Button size="sm" variant="outline" onClick={() => { setWalletUser(user); setWalletForm({ amount: '', type: 'credit', reason: '' }); }} data-testid={`adjust-wallet-${user.id}`}>
+                                <Wallet className="w-4 h-4 mr-1" />
+                                Adjust Wallet
+                              </Button>
+                              <Button size="sm" variant="outline" onClick={() => { setResetUser(user); setResetForm({ new_password: '', reason: '' }); setResetResult(null); }} data-testid={`reset-password-${user.id}`}>
+                                <KeyRound className="w-4 h-4 mr-1" />
+                                Reset Password
+                              </Button>
+                            </div>
                           </td>
                         </tr>
                       ))}
@@ -971,6 +1004,54 @@ export const AdminPanel = () => {
               Apply Adjustment
             </Button>
           </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Password Reset Dialog */}
+      <Dialog open={!!resetUser} onOpenChange={(o) => { if (!o) { setResetUser(null); setResetForm({ new_password: '', reason: '' }); setResetResult(null); } }}>
+        <DialogContent data-testid="reset-password-dialog">
+          <DialogHeader>
+            <DialogTitle>Reset Password — {resetUser?.name}</DialogTitle>
+            <DialogDescription>
+              {resetUser?.email}. Leave the field blank to auto-generate a secure temporary password, or type a specific one. Every reset is logged in the audit trail.
+            </DialogDescription>
+          </DialogHeader>
+          {resetResult ? (
+            <div className="space-y-4">
+              <div className="rounded-md border border-green-200 bg-green-50 p-4">
+                <p className="text-sm text-gray-600 mb-2">Temporary password (share this with the user):</p>
+                <div className="flex items-center gap-2">
+                  <code className="flex-1 text-lg font-mono font-bold text-green-700 break-all" data-testid="reset-temp-password">{resetResult}</code>
+                  <Button size="sm" variant="outline" onClick={() => { navigator.clipboard?.writeText(resetResult); toast.success('Copied'); }} data-testid="reset-copy-btn">
+                    <Copy className="w-4 h-4" />
+                  </Button>
+                </div>
+              </div>
+              <Button className="w-full" onClick={() => { setResetUser(null); setResetForm({ new_password: '', reason: '' }); setResetResult(null); }} data-testid="reset-done-btn">
+                Done
+              </Button>
+            </div>
+          ) : (
+            <div className="space-y-4">
+              <div>
+                <Label htmlFor="reset-pwd">New password (optional)</Label>
+                <Input id="reset-pwd" type="text" value={resetForm.new_password}
+                  onChange={(e) => setResetForm({ ...resetForm, new_password: e.target.value })}
+                  placeholder="Leave blank to auto-generate" className="mt-1" data-testid="reset-password-input" />
+              </div>
+              <div>
+                <Label htmlFor="reset-reason">Reason / Note (optional)</Label>
+                <Textarea id="reset-reason" value={resetForm.reason}
+                  onChange={(e) => setResetForm({ ...resetForm, reason: e.target.value })}
+                  placeholder="e.g. User requested reset via phone" className="mt-1" rows={2}
+                  data-testid="reset-reason-input" />
+              </div>
+              <Button onClick={submitPasswordReset} className="w-full bg-gradient-to-r from-rose-500 to-pink-600" data-testid="reset-password-submit">
+                <KeyRound className="w-4 h-4 mr-2" />
+                Reset Password
+              </Button>
+            </div>
+          )}
         </DialogContent>
       </Dialog>
 
