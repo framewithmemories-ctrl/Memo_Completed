@@ -2,6 +2,11 @@
 
 ## June 2026
 
+### Sprint: AI Usage Counter (tested e2e)
+- New `GET /api/admin/ai-usage` returns today's + all-time Gemini stats: total calls, live, cache_hit, errors, cache-hit rate, and a per-feature breakdown for today.
+- Lightweight non-blocking tracking via `record_ai_usage(feature, status)` → `ai_usage_log` collection. Instrumented all 3 Gemini call sites: gift_finder, review_highlights (live + cache_hit), product_description.
+- Admin Dashboard now shows an "AI Usage (Gemini)" card (Calls Today, Cache-Hit Rate, Live Calls, Errors + all-time summary). Verified e2e: triggered a live description + cached highlights → card shows 2 calls / 50% cache-hit.
+
 ### Sprint: Force-change + Audit Log view + Gemini scope (tested e2e)
 - Added `force_change` to admin reset: sets `must_change_password=true`. New `POST /api/auth/change-password` (user) clears the flag. AccountButton now shows a mandatory "Set a New Password" gate on login when flagged — verified e2e through the UI (login → gate → update → account access).
 - Admin → Settings now shows an "Admin Audit Log" card (`GET /api/admin/audit-log`) listing recent password resets with actor, target, generated/forced flags and reason.

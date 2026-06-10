@@ -101,6 +101,9 @@ export const AdminPanel = () => {
   // Audit log (Settings tab)
   const [auditLog, setAuditLog] = useState([]);
 
+  // AI (Gemini) usage stats (Dashboard)
+  const [aiUsage, setAiUsage] = useState(null);
+
   // Product create/edit dialog
   const [productDialog, setProductDialog] = useState({ open: false, mode: 'create', id: null });
   const [productForm, setProductForm] = useState({ name: '', description: '', category: 'frames', base_price: '', image_url: '' });
@@ -195,6 +198,12 @@ export const AdminPanel = () => {
       setStats(response.data);
     } catch (error) {
       handleApiError(error, 'Failed to load dashboard data');
+    }
+    try {
+      const ai = await axios.get(`${API}/admin/ai-usage`, adminAuthConfig());
+      setAiUsage(ai.data);
+    } catch (error) {
+      // non-blocking
     }
   };
 
@@ -658,9 +667,48 @@ export const AdminPanel = () => {
                 </CardContent>
               </Card>
             </div>
-          </TabsContent>
 
-          {/* Orders Tab */}
+            {/* AI (Gemini) Usage */}
+            <Card className="mt-6" data-testid="ai-usage-card">
+              <CardHeader>
+                <div className="flex items-center justify-between">
+                  <div>
+                    <CardTitle className="flex items-center"><Sparkles className="w-5 h-5 mr-2 text-purple-600" />AI Usage (Gemini)</CardTitle>
+                    <p className="text-sm text-gray-500 mt-1">
+                      {aiUsage?.ai_configured ? 'Live AI is enabled.' : 'AI not configured — add GEMINI_API_KEY to enable.'}
+                    </p>
+                  </div>
+                  <Button variant="outline" size="sm" onClick={loadDashboardData} data-testid="ai-usage-refresh">
+                    <RefreshCw className="w-4 h-4 mr-2" />Refresh
+                  </Button>
+                </div>
+              </CardHeader>
+              <CardContent>
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                  <div className="p-4 bg-purple-50 rounded-lg">
+                    <p className="text-sm text-gray-600">Calls Today</p>
+                    <p className="text-2xl font-bold text-purple-700" data-testid="ai-calls-today">{aiUsage?.today?.total_calls ?? 0}</p>
+                  </div>
+                  <div className="p-4 bg-green-50 rounded-lg">
+                    <p className="text-sm text-gray-600">Cache-Hit Rate (Today)</p>
+                    <p className="text-2xl font-bold text-green-700" data-testid="ai-cache-rate">{aiUsage?.today?.cache_hit_rate ?? 0}%</p>
+                  </div>
+                  <div className="p-4 bg-blue-50 rounded-lg">
+                    <p className="text-sm text-gray-600">Live Calls Today</p>
+                    <p className="text-2xl font-bold text-blue-700" data-testid="ai-live-today">{aiUsage?.today?.live ?? 0}</p>
+                  </div>
+                  <div className="p-4 bg-rose-50 rounded-lg">
+                    <p className="text-sm text-gray-600">Errors Today</p>
+                    <p className="text-2xl font-bold text-rose-700" data-testid="ai-errors-today">{aiUsage?.today?.error ?? 0}</p>
+                  </div>
+                </div>
+                <p className="text-xs text-gray-500 mt-4">
+                  All-time: {aiUsage?.all_time?.total_calls ?? 0} calls · {aiUsage?.all_time?.cache_hit_rate ?? 0}% cache-hit.
+                  Cached responses (e.g. review highlights) don't consume Gemini quota — a higher cache-hit rate means lower API cost.
+                </p>
+              </CardContent>
+            </Card>
+          </TabsContent>
           <TabsContent value="orders" className="mt-6">
             <Card>
               <CardHeader>

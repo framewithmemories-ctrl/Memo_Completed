@@ -95,6 +95,20 @@ async def require_admin(creds: HTTPAuthorizationCredentials = Depends(security))
     return payload
 
 
+async def record_ai_usage(feature: str, status: str):
+    """Lightweight, non-blocking AI usage tracking. status: 'live' | 'cache_hit' | 'error'."""
+    try:
+        now = datetime.now(timezone.utc)
+        await db.ai_usage_log.insert_one({
+            "feature": feature,
+            "status": status,
+            "date": now.strftime("%Y-%m-%d"),
+            "created_at": now.isoformat(),
+        })
+    except Exception:
+        pass  # never let analytics break a user-facing flow
+
+
 async def verify_user_access(user_id: str, creds: HTTPAuthorizationCredentials = Depends(security)) -> dict:
     """Ensure the caller is the owner of user_id (used to protect wallet/photo routes)."""
     if not creds:
@@ -607,7 +621,9 @@ Recommend 3-4 specific gifts chosen from or inspired by our catalog. For each re
 
         response = await gemini_generate(gift_prompt, system=system_message, max_tokens=1300)
         if not response:
+            await record_ai_usage("gift_finder", "error")
             raise Exception("Gemini unavailable - using fallback recommendations")
+        await record_ai_usage("gift_finder", "live")
         
         return {
             "suggestions": response,
@@ -774,6 +790,7 @@ async def review_highlights():
             updated = None
         fresh = updated and (now - updated).total_seconds() < 86400
         if fresh and cache.get("review_count") == total and cache.get("text"):
+            await record_ai_usage("review_highlights", "cache_hit")
             return {"highlights": cache["text"], "cached": True}
     if total < 3 or not gemini_available():
         return {"highlights": cache.get("text", "") if cache else "", "cached": bool(cache)}
@@ -792,12 +809,14 @@ async def review_highlights():
     )
     text = await gemini_generate(prompt, max_tokens=200, temperature=0.5)
     if not text:
+        await record_ai_usage("review_highlights", "error")
         return {"highlights": cache.get("text", "") if cache else "", "cached": bool(cache)}
     await db.ai_cache.update_one(
         {"key": "review_highlights"},
         {"$set": {"key": "review_highlights", "text": text, "review_count": total, "updated_at": now.isoformat()}},
         upsert=True,
     )
+    await record_ai_usage("review_highlights", "live")
     return {"highlights": text, "cached": False}
 
 
@@ -1506,6 +1525,52 @@ async def get_admin_audit_log(limit: int = 50, admin=Depends(require_admin)):
     return {"entries": entries}
 
 
+@api_router.get("/admin/ai-usage")
+async def get_ai_usage(admin=Depends(require_admin)):
+    """Gemini AI usage stats: today's calls, cache-hit rate, totals and per-feature breakdown."""
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+    async def counts(match: dict) -> dict:
+        pipeline = [{"$match": match}, {"$group": {"_id": "$status", "n": {"$sum": 1}}}]
+        rows = await db.ai_usage_log.aggregate(pipeline).to_list(100)
+        d = {r["_id"]: r["n"] for r in rows}
+        return {"live": d.get("live", 0), "cache_hit": d.get("cache_hit", 0), "error": d.get("error", 0)}
+
+    today_counts = await counts({"date": today})
+    total_counts = await counts({})
+
+    # per-feature breakdown for today
+    feat_pipeline = [
+        {"$match": {"date": today}},
+        {"$group": {"_id": {"feature": "$feature", "status": "$status"}, "n": {"$sum": 1}}},
+    ]
+    feat_rows = await db.ai_usage_log.aggregate(feat_pipeline).to_list(200)
+    by_feature: dict = {}
+    for r in feat_rows:
+        f = r["_id"]["feature"]
+        s = r["_id"]["status"]
+        by_feature.setdefault(f, {"live": 0, "cache_hit": 0, "error": 0})[s] = r["n"]
+
+    def cache_rate(c: dict) -> float:
+        served = c["live"] + c["cache_hit"]
+        return round(100 * c["cache_hit"] / served, 1) if served else 0.0
+
+    return {
+        "ai_configured": gemini_available(),
+        "today": {
+            **today_counts,
+            "total_calls": today_counts["live"] + today_counts["cache_hit"],
+            "cache_hit_rate": cache_rate(today_counts),
+        },
+        "all_time": {
+            **total_counts,
+            "total_calls": total_counts["live"] + total_counts["cache_hit"],
+            "cache_hit_rate": cache_rate(total_counts),
+        },
+        "by_feature_today": by_feature,
+    }
+
+
 @api_router.post("/admin/products", response_model=Product)
 async def create_product_admin(product: ProductCreate, admin=Depends(require_admin)):
     """Create a new product (admin only)."""
@@ -1535,7 +1600,9 @@ async def generate_product_description(req: GenerateDescriptionRequest, admin=De
     )
     text = await gemini_generate(prompt, max_tokens=300, temperature=0.8)
     if not text:
+        await record_ai_usage("product_description", "error")
         raise HTTPException(status_code=502, detail="Could not generate a description right now. Please try again.")
+    await record_ai_usage("product_description", "live")
     return {"description": text}
 
 
