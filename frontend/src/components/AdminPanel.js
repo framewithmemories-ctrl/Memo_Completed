@@ -95,8 +95,11 @@ export const AdminPanel = () => {
 
   // Password reset dialog
   const [resetUser, setResetUser] = useState(null);
-  const [resetForm, setResetForm] = useState({ new_password: '', reason: '' });
+  const [resetForm, setResetForm] = useState({ new_password: '', reason: '', force_change: false });
   const [resetResult, setResetResult] = useState(null);
+
+  // Audit log (Settings tab)
+  const [auditLog, setAuditLog] = useState([]);
 
   // Product create/edit dialog
   const [productDialog, setProductDialog] = useState({ open: false, mode: 'create', id: null });
@@ -322,6 +325,7 @@ export const AdminPanel = () => {
       const res = await axios.post(`${API}/admin/users/${resetUser.id}/reset-password`, {
         new_password: pwd || null,
         reason: resetForm.reason.trim() || null,
+        force_change: resetForm.force_change,
       }, adminAuthConfig());
       if (res.data.generated) {
         setResetResult(res.data.temporary_password);
@@ -329,10 +333,19 @@ export const AdminPanel = () => {
       } else {
         toast.success('Password updated successfully');
         setResetUser(null);
-        setResetForm({ new_password: '', reason: '' });
+        setResetForm({ new_password: '', reason: '', force_change: false });
       }
     } catch (error) {
       handleApiError(error, 'Failed to reset password');
+    }
+  };
+
+  const loadAuditLog = async () => {
+    try {
+      const res = await axios.get(`${API}/admin/audit-log?limit=50`, adminAuthConfig());
+      setAuditLog(res.data.entries || []);
+    } catch (error) {
+      handleApiError(error, 'Failed to load audit log');
     }
   };
 
@@ -488,6 +501,7 @@ export const AdminPanel = () => {
           else if (tab === 'users') loadUsers();
           else if (tab === 'products') loadProducts();
           else if (tab === 'dashboard') loadDashboardData();
+          else if (tab === 'settings') loadAuditLog();
         }}>
           <TabsList className="grid w-full grid-cols-6">
             <TabsTrigger value="dashboard" className="flex items-center">
@@ -891,7 +905,7 @@ export const AdminPanel = () => {
                                 <Wallet className="w-4 h-4 mr-1" />
                                 Adjust Wallet
                               </Button>
-                              <Button size="sm" variant="outline" onClick={() => { setResetUser(user); setResetForm({ new_password: '', reason: '' }); setResetResult(null); }} data-testid={`reset-password-${user.id}`}>
+                              <Button size="sm" variant="outline" onClick={() => { setResetUser(user); setResetForm({ new_password: '', reason: '', force_change: false }); setResetResult(null); }} data-testid={`reset-password-${user.id}`}>
                                 <KeyRound className="w-4 h-4 mr-1" />
                                 Reset Password
                               </Button>
@@ -959,6 +973,55 @@ export const AdminPanel = () => {
                 </CardContent>
               </Card>
             </div>
+
+            {/* Audit Log */}
+            <Card className="mt-6" data-testid="audit-log-card">
+              <CardHeader>
+                <div className="flex items-center justify-between">
+                  <div>
+                    <CardTitle className="flex items-center"><Activity className="w-4 h-4 mr-2" />Admin Audit Log</CardTitle>
+                    <p className="text-sm text-gray-500 mt-1">Recent sensitive admin actions (e.g. password resets).</p>
+                  </div>
+                  <Button variant="outline" size="sm" onClick={loadAuditLog} data-testid="audit-log-refresh">
+                    <RefreshCw className="w-4 h-4 mr-2" />Refresh
+                  </Button>
+                </div>
+              </CardHeader>
+              <CardContent>
+                {auditLog.length === 0 ? (
+                  <p className="text-sm text-gray-500 py-4 text-center" data-testid="audit-log-empty">No audit entries yet.</p>
+                ) : (
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="border-b text-left text-gray-500">
+                          <th className="p-2">When</th>
+                          <th className="p-2">Action</th>
+                          <th className="p-2">By</th>
+                          <th className="p-2">Target User</th>
+                          <th className="p-2">Details</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {auditLog.map((e) => (
+                          <tr key={e.id} className="border-b hover:bg-gray-50" data-testid={`audit-row-${e.id}`}>
+                            <td className="p-2 whitespace-nowrap">{new Date(e.created_at).toLocaleString()}</td>
+                            <td className="p-2"><Badge variant="secondary">{e.action}</Badge></td>
+                            <td className="p-2">{e.actor}</td>
+                            <td className="p-2">{e.target_user_email || e.target_user_id}</td>
+                            <td className="p-2 text-gray-600">
+                              {e.generated ? 'Temp password generated' : 'Password set'}
+                              {e.force_change ? ' · forced change' : ''}
+                              {e.reason ? ` · "${e.reason}"` : ''}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
           </TabsContent>
         </Tabs>
       </div>
@@ -1008,7 +1071,7 @@ export const AdminPanel = () => {
       </Dialog>
 
       {/* Password Reset Dialog */}
-      <Dialog open={!!resetUser} onOpenChange={(o) => { if (!o) { setResetUser(null); setResetForm({ new_password: '', reason: '' }); setResetResult(null); } }}>
+      <Dialog open={!!resetUser} onOpenChange={(o) => { if (!o) { setResetUser(null); setResetForm({ new_password: '', reason: '', force_change: false }); setResetResult(null); } }}>
         <DialogContent data-testid="reset-password-dialog">
           <DialogHeader>
             <DialogTitle>Reset Password — {resetUser?.name}</DialogTitle>
@@ -1027,7 +1090,7 @@ export const AdminPanel = () => {
                   </Button>
                 </div>
               </div>
-              <Button className="w-full" onClick={() => { setResetUser(null); setResetForm({ new_password: '', reason: '' }); setResetResult(null); }} data-testid="reset-done-btn">
+              <Button className="w-full" onClick={() => { setResetUser(null); setResetForm({ new_password: '', reason: '', force_change: false }); setResetResult(null); }} data-testid="reset-done-btn">
                 Done
               </Button>
             </div>
@@ -1046,6 +1109,12 @@ export const AdminPanel = () => {
                   placeholder="e.g. User requested reset via phone" className="mt-1" rows={2}
                   data-testid="reset-reason-input" />
               </div>
+              <label className="flex items-center gap-2 text-sm text-gray-700 cursor-pointer select-none" data-testid="reset-force-change-label">
+                <input type="checkbox" checked={resetForm.force_change}
+                  onChange={(e) => setResetForm({ ...resetForm, force_change: e.target.checked })}
+                  className="h-4 w-4 rounded border-gray-300" data-testid="reset-force-change-checkbox" />
+                Require user to set a new password on next login
+              </label>
               <Button onClick={submitPasswordReset} className="w-full bg-gradient-to-r from-rose-500 to-pink-600" data-testid="reset-password-submit">
                 <KeyRound className="w-4 h-4 mr-2" />
                 Reset Password

@@ -109,6 +109,20 @@ export const AuthProvider = ({ children }) => {
     return res.data.user;
   }, [persist]);
 
+  const changePassword = useCallback(async (currentPassword, newPassword) => {
+    const res = await axios.post(`${API}/auth/change-password`, {
+      current_password: currentPassword,
+      new_password: newPassword,
+    });
+    setUser(res.data.user);
+    setToken((t) => {
+      localStorage.setItem('memoriesAuth', JSON.stringify({ token: t, user: res.data.user }));
+      return t;
+    });
+    syncLegacyProfile(res.data.user);
+    return res.data.user;
+  }, []);
+
   const logout = useCallback(() => {
     localStorage.removeItem('memoriesAuth');
     setAuthHeader(null);
@@ -118,7 +132,7 @@ export const AuthProvider = ({ children }) => {
   }, []);
 
   return (
-    <AuthContext.Provider value={{ user, token, loading, login, register, logout, isAuthenticated: !!user }}>
+    <AuthContext.Provider value={{ user, token, loading, login, register, changePassword, logout, isAuthenticated: !!user }}>
       {children}
     </AuthContext.Provider>
   );

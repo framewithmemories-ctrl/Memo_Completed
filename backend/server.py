@@ -200,6 +200,7 @@ class User(BaseModel):
     store_credits: float = 0.0
     total_spent: float = 0.0
     role: str = "user"
+    must_change_password: bool = False
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 class UserCreate(BaseModel):
@@ -1197,6 +1198,32 @@ async def login(req: LoginRequest):
     return {"token": token, "user": User(**user).dict()}
 
 
+class ChangePasswordRequest(BaseModel):
+    current_password: str
+    new_password: str
+
+
+@api_router.post("/auth/change-password")
+async def change_password(req: ChangePasswordRequest, current=Depends(get_current_user)):
+    """Authenticated user changes their own password. Clears any admin-set
+    must_change_password flag on success."""
+    if not verify_password(req.current_password, current.get("password_hash", "")):
+        raise HTTPException(status_code=401, detail="Current password is incorrect")
+    if len(req.new_password) < 6:
+        raise HTTPException(status_code=400, detail="Password must be at least 6 characters")
+    if len(req.new_password.encode("utf-8")) > 72:
+        raise HTTPException(status_code=400, detail="Password must be 72 bytes or fewer")
+    if verify_password(req.new_password, current.get("password_hash", "")):
+        raise HTTPException(status_code=400, detail="New password must be different from the current one")
+    await db.users.update_one(
+        {"id": current["id"]},
+        {"$set": {"password_hash": hash_password(req.new_password), "must_change_password": False}},
+    )
+    updated = await db.users.find_one({"id": current["id"]})
+    updated.pop("_id", None)
+    return {"success": True, "user": User(**updated).dict()}
+
+
 @api_router.get("/auth/me")
 async def auth_me(current=Depends(get_current_user)):
     return {"user": User(**current).dict()}
@@ -1409,6 +1436,7 @@ async def admin_adjust_wallet(user_id: str, req: WalletAdjustRequest, admin=Depe
 class AdminPasswordResetRequest(BaseModel):
     new_password: Optional[str] = None  # if omitted, a secure temporary password is generated
     reason: Optional[str] = None
+    force_change: bool = False  # require the user to set a new password on next login
 
 
 def _generate_temp_password(length: int = 12) -> str:
@@ -1421,6 +1449,7 @@ async def admin_reset_user_password(user_id: str, req: AdminPasswordResetRequest
     """Admin-initiated password reset (no email channel).
     If new_password is provided it is set directly; otherwise a secure temporary
     password is generated and returned to the admin to share with the user.
+    When force_change is true, the user must change their password on next login.
     Every reset is recorded in admin_audit_log."""
     user = await db.users.find_one({"id": user_id})
     if not user:
@@ -1439,7 +1468,11 @@ async def admin_reset_user_password(user_id: str, req: AdminPasswordResetRequest
 
     await db.users.update_one(
         {"id": user_id},
-        {"$set": {"password_hash": hash_password(new_password), "password_reset_at": datetime.now(timezone.utc).isoformat()}},
+        {"$set": {
+            "password_hash": hash_password(new_password),
+            "password_reset_at": datetime.now(timezone.utc).isoformat(),
+            "must_change_password": bool(req.force_change),
+        }},
     )
 
     audit_entry = {
@@ -1449,6 +1482,7 @@ async def admin_reset_user_password(user_id: str, req: AdminPasswordResetRequest
         "target_user_id": user_id,
         "target_user_email": user.get("email", ""),
         "generated": generated,
+        "force_change": bool(req.force_change),
         "reason": (req.reason or "").strip(),
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
@@ -1457,6 +1491,7 @@ async def admin_reset_user_password(user_id: str, req: AdminPasswordResetRequest
     return {
         "success": True,
         "generated": generated,
+        "force_change": bool(req.force_change),
         # temporary password is only returned when auto-generated, so the admin can relay it
         "temporary_password": new_password if generated else None,
         "message": "Password reset successfully. Share the temporary password with the user." if generated

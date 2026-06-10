@@ -12,7 +12,7 @@ import { useAuth, formatApiError } from "../context/AuthContext";
 import { ProfilePhotoStorage } from './ProfilePhotoStorage';
 import { DigitalWallet } from './DigitalWallet';
 import {
-  User, Mail, Phone, MapPin, LogOut, Camera, Wallet, Package, ShoppingCart, Star, Loader2
+  User, Mail, Phone, MapPin, LogOut, Camera, Wallet, Package, ShoppingCart, Star, Loader2, KeyRound, ShieldAlert
 } from "lucide-react";
 
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
@@ -77,24 +77,48 @@ const OrdersTab = ({ userId }) => {
 };
 
 export const AccountButton = () => {
-  const { user, isAuthenticated, login, register, logout } = useAuth();
+  const { user, isAuthenticated, login, register, changePassword, logout } = useAuth();
   const [open, setOpen] = useState(false);
   const [mode, setMode] = useState('login');
   const [loading, setLoading] = useState(false);
   const [activeTab, setActiveTab] = useState('profile');
   const [loginForm, setLoginForm] = useState({ email: '', password: '' });
   const [registerForm, setRegisterForm] = useState({ name: '', email: '', password: '', phone: '' });
+  const [pwdForm, setPwdForm] = useState({ current: '', next: '', confirm: '' });
 
   const handleLogin = async (e) => {
     e.preventDefault();
     setLoading(true);
     try {
       const u = await login(loginForm.email, loginForm.password);
-      toast.success(`Welcome back, ${u.name}! 🎉`);
+      if (u.must_change_password) {
+        toast.info('Please set a new password to continue.');
+        setPwdForm({ current: loginForm.password, next: '', confirm: '' });
+      } else {
+        toast.success(`Welcome back, ${u.name}! 🎉`);
+      }
       setActiveTab('profile');
       setLoginForm({ email: '', password: '' });
     } catch (err) {
       toast.error(formatApiError(err.response?.data?.detail) || 'Login failed');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleChangePassword = async (e) => {
+    e.preventDefault();
+    if (pwdForm.next.length < 6) { toast.error('New password must be at least 6 characters'); return; }
+    if (pwdForm.next !== pwdForm.confirm) { toast.error('Passwords do not match'); return; }
+    setLoading(true);
+    try {
+      const u = await changePassword(pwdForm.current, pwdForm.next);
+      toast.success('Password updated successfully! 🔐');
+      setPwdForm({ current: '', next: '', confirm: '' });
+      setActiveTab('profile');
+      return u;
+    } catch (err) {
+      toast.error(formatApiError(err.response?.data?.detail) || 'Failed to change password');
     } finally {
       setLoading(false);
     }
@@ -215,6 +239,45 @@ export const AccountButton = () => {
                   </form>
                 </TabsContent>
               </Tabs>
+            </>
+          ) : user.must_change_password ? (
+            <>
+              <DialogHeader>
+                <DialogTitle className="flex items-center space-x-2">
+                  <ShieldAlert className="w-5 h-5 text-rose-600" />
+                  <span>Set a New Password</span>
+                </DialogTitle>
+                <DialogDescription>
+                  An administrator reset your password. For your security, please choose a new password before continuing.
+                </DialogDescription>
+              </DialogHeader>
+              <form onSubmit={handleChangePassword} className="space-y-4 mt-2" data-testid="force-change-password-form">
+                <div>
+                  <Label htmlFor="fc-current">Current / temporary password</Label>
+                  <Input id="fc-current" type="password" required data-testid="fc-current-input"
+                    value={pwdForm.current}
+                    onChange={(e) => setPwdForm({ ...pwdForm, current: e.target.value })} className="mt-1" />
+                </div>
+                <div>
+                  <Label htmlFor="fc-next">New password</Label>
+                  <Input id="fc-next" type="password" required data-testid="fc-next-input"
+                    value={pwdForm.next}
+                    onChange={(e) => setPwdForm({ ...pwdForm, next: e.target.value })} className="mt-1" />
+                </div>
+                <div>
+                  <Label htmlFor="fc-confirm">Confirm new password</Label>
+                  <Input id="fc-confirm" type="password" required data-testid="fc-confirm-input"
+                    value={pwdForm.confirm}
+                    onChange={(e) => setPwdForm({ ...pwdForm, confirm: e.target.value })} className="mt-1" />
+                </div>
+                <Button type="submit" disabled={loading} data-testid="fc-submit-button"
+                  className="w-full bg-gradient-to-r from-rose-500 to-pink-600">
+                  {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <><KeyRound className="w-4 h-4 mr-2" />Update Password</>}
+                </Button>
+                <Button type="button" variant="ghost" className="w-full" onClick={handleLogout} data-testid="fc-logout-button">
+                  Cancel & Log out
+                </Button>
+              </form>
             </>
           ) : (
             <>

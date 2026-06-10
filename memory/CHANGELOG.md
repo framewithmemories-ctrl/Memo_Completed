@@ -2,6 +2,12 @@
 
 ## June 2026
 
+### Sprint: Force-change + Audit Log view + Gemini scope (tested e2e)
+- Added `force_change` to admin reset: sets `must_change_password=true`. New `POST /api/auth/change-password` (user) clears the flag. AccountButton now shows a mandatory "Set a New Password" gate on login when flagged — verified e2e through the UI (login → gate → update → account access).
+- Admin → Settings now shows an "Admin Audit Log" card (`GET /api/admin/audit-log`) listing recent password resets with actor, target, generated/forced flags and reason.
+- Added `must_change_password` field to User model.
+- Gemini integration scope (unchanged this sprint, confirmed): 3 features via `gemini_helper.py` (google-genai SDK, model `gemini-2.5-flash` default, fallback `gemini-2.0-flash`, retries + graceful None fallback): (1) AI Gift Finder, (2) Storefront Review Highlights (cached, only runs with ≥3 reviews), (3) Admin Product Description generator.
+
 ### Sprint: Build fix + Admin Password Reset (tested e2e)
 - Fixed P0 build blocker: the function `usePhotoForOrder` in ProfilePhotoStorage.js (a plain handler, not a hook) tripped ESLint rules-of-hooks → renamed to `applyPhotoToOrder`.
 - Removed broken `/app/frontend/.eslintrc.json` (extended `react-app`, which isn't installed → "Failed to load config" build error). react-scripts 5 already bundles its own eslint config.

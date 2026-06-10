@@ -18,7 +18,12 @@
 - Endpoint: `POST /api/admin/users/{user_id}/reset-password` (admin Bearer)
   - Body `{ "new_password": "..." }` to set a specific password (min 6 chars), OR
   - Body `{ "reason": "..." }` (no password) to auto-generate a 12-char temp password, returned in response as `temporary_password` for the admin to share with the user.
-- Every reset is logged to `admin_audit_log`; view via `GET /api/admin/audit-log` (admin Bearer).
+  - Body `{ "force_change": true }` requires the user to set a new password on next login (sets `must_change_password=true`).
+- Every reset is logged to `admin_audit_log`; view via `GET /api/admin/audit-log` (admin Bearer) or in Admin → Settings → Admin Audit Log.
+
+## Force Password Change & Self-Service Change
+- `POST /api/auth/change-password` (user Bearer) { current_password, new_password } → updates hash, clears `must_change_password`.
+- On login, `user.must_change_password` drives a mandatory "Set a New Password" gate in the AccountButton dialog before the user can access account tabs.
 
 ## Notes
 - JWT secret in backend/.env (JWT_SECRET). Tokens valid 7 days.
