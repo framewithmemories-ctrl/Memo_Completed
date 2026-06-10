@@ -706,6 +706,41 @@ export const AdminPanel = () => {
                   All-time: {aiUsage?.all_time?.total_calls ?? 0} calls · {aiUsage?.all_time?.cache_hit_rate ?? 0}% cache-hit.
                   Cached responses (e.g. review highlights) don't consume Gemini quota — a higher cache-hit rate means lower API cost.
                 </p>
+                {aiUsage?.daily_7d && (
+                  <div className="mt-6" data-testid="ai-usage-trend">
+                    <div className="flex items-center justify-between mb-2">
+                      <p className="text-sm font-medium text-gray-700">7-Day Call Trend</p>
+                      <p className="text-xs text-gray-500">Peak: {Math.max(0, ...aiUsage.daily_7d.map((d) => d.total))} calls/day</p>
+                    </div>
+                    {(() => {
+                      const data = aiUsage.daily_7d;
+                      const max = Math.max(1, ...data.map((d) => d.total));
+                      return (
+                        <div className="flex items-end gap-2 h-28">
+                          {data.map((d) => {
+                            const livePct = (d.live / max) * 100;
+                            const cachePct = (d.cache_hit / max) * 100;
+                            const label = new Date(d.date + 'T00:00:00').toLocaleDateString(undefined, { weekday: 'short' });
+                            return (
+                              <div key={d.date} className="flex-1 flex flex-col items-center justify-end h-full" data-testid={`ai-trend-bar-${d.date}`} title={`${d.date}: ${d.total} calls (${d.live} live, ${d.cache_hit} cached)`}>
+                                <span className="text-[10px] text-gray-500 mb-1">{d.total > 0 ? d.total : ''}</span>
+                                <div className="w-full flex flex-col justify-end rounded-t overflow-hidden" style={{ height: '100%' }}>
+                                  <div className="w-full bg-green-400" style={{ height: `${cachePct}%` }}></div>
+                                  <div className="w-full bg-purple-500" style={{ height: `${livePct}%` }}></div>
+                                </div>
+                                <span className="text-[10px] text-gray-400 mt-1">{label}</span>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      );
+                    })()}
+                    <div className="flex items-center gap-4 mt-3 text-xs text-gray-500">
+                      <span className="flex items-center gap-1"><span className="inline-block w-3 h-3 rounded-sm bg-purple-500"></span>Live calls</span>
+                      <span className="flex items-center gap-1"><span className="inline-block w-3 h-3 rounded-sm bg-green-400"></span>Cached (no quota)</span>
+                    </div>
+                  </div>
+                )}
               </CardContent>
             </Card>
           </TabsContent>

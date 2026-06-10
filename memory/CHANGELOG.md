@@ -2,6 +2,12 @@
 
 ## June 2026
 
+### Sprint: Gemini reliability fixes + 7-day AI trend (tested e2e)
+- FIXED truncation bug: `gemini-2.5-flash` spends `max_output_tokens` on internal "thinking", truncating answers (Gift Finder was cut to ~230 chars). `gemini_helper._call` now sets `ThinkingConfig(thinking_budget=0)` for 2.5 models → full output (Gift Finder now ~4000 chars, Product Description full).
+- FIXED dead fallback model: `gemini-2.0-flash` returns `limit: 0` (not enabled) on this free-tier key, so transient 503s on 2.5-flash always failed → silent fallback text. Changed fallback to `gemini-2.5-flash-lite` (own free-tier quota); both models overridable via `GEMINI_MODEL` / `GEMINI_FALLBACK_MODEL`.
+- Verified ALL 3 Gemini features live & non-truncated: Gift Finder (live), Product Description (live), Review Highlights (cached, regenerates ~daily / on review-count change).
+- Added 7-day call trend to the AI Usage card: `GET /api/admin/ai-usage` now returns `daily_7d` (zero-filled). Frontend renders a dependency-free stacked bar sparkline (purple=live, green=cached) with day labels, peak indicator and legend. Verified e2e (7 bars).
+
 ### Sprint: AI Usage Counter (tested e2e)
 - New `GET /api/admin/ai-usage` returns today's + all-time Gemini stats: total calls, live, cache_hit, errors, cache-hit rate, and a per-feature breakdown for today.
 - Lightweight non-blocking tracking via `record_ai_usage(feature, status)` → `ai_usage_log` collection. Instrumented all 3 Gemini call sites: gift_finder, review_highlights (live + cache_hit), product_description.

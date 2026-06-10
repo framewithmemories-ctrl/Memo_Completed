@@ -42,7 +42,7 @@ async def gemini_generate(
     if client is None:
         return None
     primary = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash").strip() or "gemini-2.5-flash"
-    fallback = "gemini-2.0-flash"
+    fallback = os.environ.get("GEMINI_FALLBACK_MODEL", "gemini-2.5-flash-lite").strip() or "gemini-2.5-flash-lite"
     models = [primary] if primary == fallback else [primary, fallback]
 
     def _call(model_name):
@@ -52,6 +52,10 @@ async def gemini_generate(
             kwargs["system_instruction"] = system
         if json_mode:
             kwargs["response_mime_type"] = "application/json"
+        # Gemini 2.5 models "think" by default, consuming the max_output_tokens budget
+        # and truncating the actual answer. Disable thinking so the full response is returned.
+        if "2.5" in model_name:
+            kwargs["thinking_config"] = types.ThinkingConfig(thinking_budget=0)
         config = types.GenerateContentConfig(**kwargs)
         resp = client.models.generate_content(model=model_name, contents=prompt, config=config)
         return (resp.text or "").strip()

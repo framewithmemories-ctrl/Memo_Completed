@@ -1551,6 +1551,31 @@ async def get_ai_usage(admin=Depends(require_admin)):
         s = r["_id"]["status"]
         by_feature.setdefault(f, {"live": 0, "cache_hit": 0, "error": 0})[s] = r["n"]
 
+    # 7-day daily trend (oldest -> newest), zero-filled
+    now_dt = datetime.now(timezone.utc)
+    last7 = [(now_dt - timedelta(days=i)).strftime("%Y-%m-%d") for i in range(6, -1, -1)]
+    daily_pipeline = [
+        {"$match": {"date": {"$in": last7}}},
+        {"$group": {"_id": {"date": "$date", "status": "$status"}, "n": {"$sum": 1}}},
+    ]
+    daily_rows = await db.ai_usage_log.aggregate(daily_pipeline).to_list(500)
+    daily_map = {d: {"live": 0, "cache_hit": 0, "error": 0} for d in last7}
+    for r in daily_rows:
+        d = r["_id"]["date"]
+        s = r["_id"]["status"]
+        if d in daily_map:
+            daily_map[d][s] = r["n"]
+    daily_7d = [
+        {
+            "date": d,
+            "live": daily_map[d]["live"],
+            "cache_hit": daily_map[d]["cache_hit"],
+            "error": daily_map[d]["error"],
+            "total": daily_map[d]["live"] + daily_map[d]["cache_hit"],
+        }
+        for d in last7
+    ]
+
     def cache_rate(c: dict) -> float:
         served = c["live"] + c["cache_hit"]
         return round(100 * c["cache_hit"] / served, 1) if served else 0.0
@@ -1568,6 +1593,7 @@ async def get_ai_usage(admin=Depends(require_admin)):
             "cache_hit_rate": cache_rate(total_counts),
         },
         "by_feature_today": by_feature,
+        "daily_7d": daily_7d,
     }
 
 
