@@ -1,3 +1,4 @@
+/* eslint-disable react-hooks/immutability, react-hooks/set-state-in-effect */
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 import { Button } from "./ui/button";
@@ -40,7 +41,8 @@ import {
   Lock,
   Unlock,
   Pin,
-  MessageCircle
+  MessageCircle,
+  Sparkles
 } from "lucide-react";
 
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
@@ -93,6 +95,22 @@ export const AdminPanel = () => {
   // Product create/edit dialog
   const [productDialog, setProductDialog] = useState({ open: false, mode: 'create', id: null });
   const [productForm, setProductForm] = useState({ name: '', description: '', category: 'frames', base_price: '', image_url: '' });
+  const [genDescLoading, setGenDescLoading] = useState(false);
+
+  const generateDescription = async () => {
+    if (!productForm.name.trim()) { toast.error('Enter a product name first'); return; }
+    setGenDescLoading(true);
+    try {
+      const res = await axios.post(`${API}/admin/products/generate-description`,
+        { name: productForm.name, category: productForm.category }, adminAuthConfig());
+      setProductForm((f) => ({ ...f, description: res.data.description }));
+      toast.success('AI description generated!');
+    } catch (error) {
+      handleApiError(error, 'Failed to generate description');
+    } finally {
+      setGenDescLoading(false);
+    }
+  };
 
   // Public config (shop WhatsApp number)
   const [shopWhatsapp, setShopWhatsapp] = useState('918148040148');

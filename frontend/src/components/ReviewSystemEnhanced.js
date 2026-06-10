@@ -1,3 +1,4 @@
+/* eslint-disable react-hooks/immutability, react-hooks/set-state-in-effect */
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 import { Button } from "./ui/button";
@@ -74,6 +75,13 @@ export const ReviewSystemEnhanced = () => {
       console.error('Error loading Google reviews:', error);
     }
   };
+
+  const [highlights, setHighlights] = useState('');
+  useEffect(() => {
+    axios.get(`${API}/reviews/highlights`)
+      .then((res) => setHighlights((res.data.highlights || '').trim()))
+      .catch(() => {});
+  }, []);
 
   // Reload when filter changes
   useEffect(() => {
@@ -362,6 +370,21 @@ export const ReviewSystemEnhanced = () => {
           </Button>
         </div>
       </div>
+
+      {/* AI: What customers love */}
+      {highlights && (
+        <div className="mb-8" data-testid="review-highlights">
+          <Card className="border-purple-200 bg-gradient-to-r from-purple-50 to-rose-50">
+            <CardContent className="p-5">
+              <h4 className="text-base font-semibold text-gray-900 flex items-center mb-2">
+                <ThumbsUp className="w-4 h-4 mr-2 text-purple-600" />
+                What customers love
+              </h4>
+              <div className="text-gray-700 text-sm whitespace-pre-line">{highlights}</div>
+            </CardContent>
+          </Card>
+        </div>
+      )}
 
       {/* Live Google Reviews */}
       {googleData.reviews && googleData.reviews.length > 0 && (

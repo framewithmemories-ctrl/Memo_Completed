@@ -14,7 +14,7 @@ import jwt as pyjwt
 import bcrypt
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 import json
-from emergentintegrations.llm.chat import LlmChat, UserMessage
+from gemini_helper import gemini_generate, gemini_available
 import base64
 import io
 from PIL import Image
@@ -541,11 +541,6 @@ async def get_gift_suggestions(request: EnhancedGiftRequest):
             enhanced_processing = False
             photo_data = None
         
-        # Initialize LLM chat for gift suggestions
-        emergent_key = os.environ.get('EMERGENT_LLM_KEY', '')
-        if not emergent_key:
-            raise HTTPException(status_code=500, detail="AI service temporarily unavailable")
-        
         # Enhanced system message for contextual AI
         system_message = """You are a gifting expert for "Memories - Photo Frames & Customized Gift Shop" located in Coimbatore. 
         We specialize in:
@@ -571,12 +566,6 @@ async def get_gift_suggestions(request: EnhancedGiftRequest):
             Consider the photo's aspect ratio and style when making frame recommendations.
             """
         
-        chat = LlmChat(
-            api_key=emergent_key,
-            session_id=f"memories_gift_quiz_{uuid.uuid4()}",
-            system_message=system_message
-        ).with_model("openai", "gpt-4o-mini")
-        
         # Enhanced quiz text with photo context
         quiz_text = f"""
         Gift recipient: {quiz_data.recipient}
@@ -596,8 +585,26 @@ async def get_gift_suggestions(request: EnhancedGiftRequest):
         if enhanced_processing:
             quiz_text += "\nPlease provide enhanced recommendations with confidence scores and detailed reasoning for each suggestion."
         
-        user_message = UserMessage(text=f"Based on this information, suggest personalized gifts from Memories shop: {quiz_text}")
-        response = await chat.send_message(user_message)
+        # Ground recommendations with our real catalog
+        product_docs = await db.products.find({}).limit(30).to_list(30)
+        catalog_lines = [
+            f"- {p.get('name')} ({p.get('category')}, from Rs.{p.get('base_price')})"
+            for p in product_docs
+        ]
+        catalog_text = "\n".join(catalog_lines) if catalog_lines else (
+            "Photo frames (wooden/acrylic/LED), photo mugs, t-shirts, acrylic prints, LED frames."
+        )
+
+        gift_prompt = f"""Customer preferences:{quiz_text}
+
+Our current product catalog:
+{catalog_text}
+
+Recommend 3-4 specific gifts chosen from or inspired by our catalog. For each recommendation include: a bold product name with a personalization idea, a detailed reason it suits this recipient/occasion, an estimated price range in Rupees, a customization suggestion, and a Confidence score (1-100). Write in warm, friendly markdown. End with our address (19B Kani Illam, Keeranatham Road, Coimbatore), phone (+91 81480 40148), and mention free home delivery."""
+
+        response = await gemini_generate(gift_prompt, system=system_message, max_tokens=1300)
+        if not response:
+            raise Exception("Gemini unavailable - using fallback recommendations")
         
         return {
             "suggestions": response,
@@ -750,6 +757,47 @@ async def get_reviews(
         }
     except Exception:
         raise HTTPException(status_code=500, detail="Failed to fetch reviews")
+
+@api_router.get("/reviews/highlights")
+async def review_highlights():
+    """Cached 'what customers love' summary (Gemini). Regenerates ~daily or when review count changes."""
+    total = await db.reviews.count_documents({"approved": True})
+    cache = await db.ai_cache.find_one({"key": "review_highlights"})
+    now = datetime.now(timezone.utc)
+    if cache:
+        try:
+            updated = datetime.fromisoformat(cache.get("updated_at", ""))
+        except Exception:
+            updated = None
+        fresh = updated and (now - updated).total_seconds() < 86400
+        if fresh and cache.get("review_count") == total and cache.get("text"):
+            return {"highlights": cache["text"], "cached": True}
+    if total < 3 or not gemini_available():
+        return {"highlights": cache.get("text", "") if cache else "", "cached": bool(cache)}
+    reviews = await db.reviews.find({"approved": True}).sort("created_at", -1).limit(40).to_list(40)
+    snippets = []
+    for r in reviews:
+        c = r.get("comment") or r.get("text") or ""
+        if c:
+            snippets.append(f"- ({r.get('rating', '?')} stars) {c[:300]}")
+    if not snippets:
+        return {"highlights": cache.get("text", "") if cache else "", "cached": bool(cache)}
+    prompt = (
+        "Summarize what customers love about this photo-frame & gift shop into exactly 3 short "
+        "bullet highlights (max 12 words each), positive and specific, based ONLY on these reviews. "
+        "Return plain bullets starting with '- ', no preamble:\n\n" + "\n".join(snippets)
+    )
+    text = await gemini_generate(prompt, max_tokens=200, temperature=0.5)
+    if not text:
+        return {"highlights": cache.get("text", "") if cache else "", "cached": bool(cache)}
+    await db.ai_cache.update_one(
+        {"key": "review_highlights"},
+        {"$set": {"key": "review_highlights", "text": text, "review_count": total, "updated_at": now.isoformat()}},
+        upsert=True,
+    )
+    return {"highlights": text, "cached": False}
+
+
 
 @api_router.get("/config")
 async def get_public_config():
@@ -1362,6 +1410,31 @@ async def create_product_admin(product: ProductCreate, admin=Depends(require_adm
     product_obj = Product(**product.dict())
     await db.products.insert_one(product_obj.dict())
     return product_obj
+
+
+class GenerateDescriptionRequest(BaseModel):
+    name: str
+    category: Optional[str] = "gift"
+
+
+@api_router.post("/admin/products/generate-description")
+async def generate_product_description(req: GenerateDescriptionRequest, admin=Depends(require_admin)):
+    """Generate an SEO-friendly product description with Gemini (admin only)."""
+    if not gemini_available():
+        raise HTTPException(status_code=503, detail="AI is not configured. Add GEMINI_API_KEY to enable this feature.")
+    if not req.name.strip():
+        raise HTTPException(status_code=400, detail="Product name is required")
+    prompt = (
+        "Write an SEO-friendly e-commerce product description (60-90 words) for a product at "
+        "Memories Photo Frames & Custom Gift Shop (Coimbatore, India).\n"
+        f"Product name: {req.name}\nCategory: {req.category}\n"
+        "Tone: warm, premium, gift-focused. Mention personalization/customization and quality "
+        "craftsmanship. Plain text only — no markdown headings, no surrounding quotes."
+    )
+    text = await gemini_generate(prompt, max_tokens=300, temperature=0.8)
+    if not text:
+        raise HTTPException(status_code=502, detail="Could not generate a description right now. Please try again.")
+    return {"description": text}
 
 
 @api_router.put("/admin/products/{product_id}")
