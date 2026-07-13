@@ -602,31 +602,89 @@ async def get_gift_suggestions(request: EnhancedGiftRequest):
         if enhanced_processing:
             quiz_text += "\nPlease provide enhanced recommendations with confidence scores and detailed reasoning for each suggestion."
         
-        # Ground recommendations with our real catalog
-        product_docs = await db.products.find({}).limit(30).to_list(30)
-        catalog_lines = [
-            f"- {p.get('name')} ({p.get('category')}, from Rs.{p.get('base_price')})"
-            for p in product_docs
+        # Ground recommendations with our real catalog (with images so we can show real products)
+        product_docs = await db.products.find({}).limit(40).to_list(40)
+        catalog = [
+            {
+                "id": p.get("id"),
+                "name": p.get("name", ""),
+                "category": p.get("category", ""),
+                "base_price": p.get("base_price", 0),
+                "image_url": p.get("image_url", ""),
+                "description": p.get("description", ""),
+            }
+            for p in product_docs if p.get("name")
         ]
-        catalog_text = "\n".join(catalog_lines) if catalog_lines else (
-            "Photo frames (wooden/acrylic/LED), photo mugs, t-shirts, acrylic prints, LED frames."
-        )
+        catalog_text = "\n".join(
+            f"- {c['name']} | category={c['category']} | from Rs.{c['base_price']}" for c in catalog
+        ) or "Photo frames (wooden/acrylic/LED), photo mugs, custom t-shirts, acrylic prints."
 
         gift_prompt = f"""Customer preferences:{quiz_text}
 
-Our current product catalog:
+Our product catalog (choose ONLY exact product names from this list):
 {catalog_text}
 
-Recommend 3-4 specific gifts chosen from or inspired by our catalog. For each recommendation include: a bold product name with a personalization idea, a detailed reason it suits this recipient/occasion, an estimated price range in Rupees, a customization suggestion, and a Confidence score (1-100). Write in warm, friendly markdown. End with our address (19B Kani Illam, Keeranatham Road, Coimbatore), phone (+91 81480 40148), and mention free home delivery."""
+Recommend the 3 best-matching products for this recipient and occasion. Return STRICT JSON only:
+{{"recommendations":[{{"product_name":"<exact catalog name>","reason":"<1-2 warm sentences on why it fits this recipient/occasion>","price_range":"<e.g. Rs.899-1599>","customization":"<one personalization idea>","confidence":<integer 60-99>}}]}}
+Pick product_name values that exactly match the catalog. Output JSON and nothing else."""
 
-        response = await gemini_generate(gift_prompt, system=system_message, max_tokens=1300)
-        if not response:
+        raw = await gemini_generate(
+            gift_prompt, system=system_message, json_mode=True, max_tokens=900, temperature=0.6
+        )
+        if not raw:
             await record_ai_usage("gift_finder", "error")
             raise Exception("Gemini unavailable - using fallback recommendations")
+
+        parsed = json.loads(raw)
+        recs = parsed.get("recommendations", []) if isinstance(parsed, dict) else []
+        if not recs:
+            raise Exception("Empty AI recommendations")
+
+        def _match_product(name: str):
+            n = (name or "").strip().lower()
+            for c in catalog:
+                if c["name"].strip().lower() == n:
+                    return c
+            for c in catalog:
+                if n and (n in c["name"].lower() or c["name"].lower() in n):
+                    return c
+            return None
+
+        suggestions = []
+        used = set()
+        for r in recs[:4]:
+            prod = _match_product(r.get("product_name", ""))
+            if not prod or prod["id"] in used:
+                prod = next((c for c in catalog if c["id"] not in used), prod)
+            if not prod:
+                continue
+            used.add(prod["id"])
+            try:
+                conf = int(r.get("confidence", 85))
+            except (TypeError, ValueError):
+                conf = 85
+            suggestions.append({
+                "product": {
+                    "id": prod["id"],
+                    "name": prod["name"],
+                    "description": prod.get("description") or r.get("reason", ""),
+                    "base_price": prod.get("base_price", 0),
+                    "image_url": prod.get("image_url", ""),
+                    "category": prod.get("category", ""),
+                },
+                "reasoning": r.get("reason", ""),
+                "confidence": max(60, min(99, conf)),
+                "price_range": r.get("price_range", ""),
+                "customization": r.get("customization", ""),
+                "aiTag": "✨ AI Pick",
+            })
+
+        if not suggestions:
+            raise Exception("No catalog products matched")
+
         await record_ai_usage("gift_finder", "live")
-        
         return {
-            "suggestions": response,
+            "suggestions": suggestions,
             "quiz_data": quiz_data.dict(),
             "enhanced": enhanced_processing,
             "photo_analyzed": photo_data is not None,
@@ -637,54 +695,88 @@ Recommend 3-4 specific gifts chosen from or inspired by our catalog. For each re
                 "specialties": ["Photo Frames", "Sublimation Printing", "Corporate Gifts"]
             }
         }
+
         
+    except HTTPException:
+        raise
     except Exception:
-        # Enhanced fallback suggestions based on quiz data
-        fallback_suggestions = f"""Based on your preferences for {quiz_data.recipient} on {quiz_data.occasion}:
+        # Let the frontend render its own varied structured fallback (different images per card)
+        raise HTTPException(status_code=502, detail="AI recommendations are temporarily unavailable. Please try again.")
 
-🎁 **AI-Recommended Gifts from Memories:**
 
-1. **Premium Photo Frame Set** (₹899-1599) - **Confidence: 95%**
-   - Perfect for showcasing precious memories
-   - Available in wooden, acrylic, and LED options
-   - Ideal for {quiz_data.occasion} celebrations
-   - **Why AI chose this:** Frames are universally appreciated and perfect for creating lasting memories
+class ChatRequest(BaseModel):
+    session_id: str
+    message: str
 
-2. **Custom Photo Mug** (₹299-499) - **Confidence: 88%**
-   - Personalized with favorite photos
-   - Great for daily use and memories
-   - Sublimation printing for durability
-   - **Why AI chose this:** Practical gift that brings joy every day, perfect for {quiz_data.relationship} relationship
 
-3. **Personalized T-Shirt** (₹399-599) - **Confidence: 82%**
-   - Custom design with photos or text
-   - High-quality sublimation printing
-   - Perfect casual gift
-   - **Why AI chose this:** Trendy and personal, great for expressing creativity"""
-        
-        if enhanced_processing and photo_data:
-            fallback_suggestions += f"""
+@api_router.post("/chat")
+async def chat_assistant(req: ChatRequest):
+    """Customer support / shopping assistant chat (Gemini), grounded in the shop catalog.
+    Multi-turn via session_id; recent history is persisted in chat_sessions."""
+    message = (req.message or "").strip()
+    if not message:
+        raise HTTPException(status_code=400, detail="Message is required")
+    if len(message) > 1000:
+        message = message[:1000]
 
-4. **Custom Frame for Your Photo** (₹899-1899) - **Confidence: 92%**
-   - Specifically designed for your uploaded photo ({photo_data.get('dimensions', {}).get('width', 'unknown')}x{photo_data.get('dimensions', {}).get('height', 'unknown')}px)
-   - Perfect aspect ratio match
-   - **Why AI chose this:** Your photo analysis shows {photo_data.get('analysis', 'great potential')} - ideal for framing"""
+    wa_fallback = ("Our AI assistant is taking a quick break. Please WhatsApp us at +91 81480 40148 "
+                   "or call us and our team will help you right away! 🎁")
 
-        fallback_suggestions += """
+    if not gemini_available():
+        return {"reply": wa_fallback, "session_id": req.session_id, "ai": False}
 
-📍 **Visit Us:** 19B Kani Illam, Keeranatham Road, Coimbatore
-📞 **Call:** +91 81480 40148
-🚚 **Free Home Delivery Available!**
+    session = await db.chat_sessions.find_one({"session_id": req.session_id})
+    history = session.get("messages", []) if session else []
 
-*We specialize in creating lasting memories through quality craftsmanship.*"""
-        
-        return {
-            "suggestions": fallback_suggestions,
-            "quiz_data": quiz_data.dict(),
-            "enhanced": enhanced_processing,
-            "photo_analyzed": photo_data is not None,
-            "note": "Generated using our enhanced AI recommendations with confidence scoring"
-        }
+    product_docs = await db.products.find({}).limit(30).to_list(30)
+    catalog_text = "\n".join(
+        f"- {p.get('name')} ({p.get('category')}, from Rs.{p.get('base_price')})"
+        for p in product_docs if p.get("name")
+    ) or "Photo frames (wooden/acrylic/LED), photo mugs, custom t-shirts, acrylic prints, corporate gifts."
+
+    system = (
+        "You are 'Memo', the warm, helpful shopping assistant for 'Memories - Photo Frames & Customized "
+        "Gift Shop' in Coimbatore. Help customers pick gifts/frames, answer about products, pricing, "
+        "customization and delivery. Keep replies concise (2-4 sentences), friendly and specific.\n"
+        "Shop details: 19B Kani Illam, Keeranatham Road, Coimbatore. WhatsApp/Call +91 81480 40148. "
+        "Free home delivery. Open Mon-Sat 9:30AM-9PM.\n"
+        f"Products you can recommend (do NOT invent items outside this list):\n{catalog_text}\n"
+        "For bulk/corporate or complex custom orders, suggest WhatsApp or a call. "
+        "Reply in plain text only (no markdown headings or asterisks)."
+    )
+
+    convo = ""
+    for m in history[-8:]:
+        role = "User" if m.get("role") == "user" else "Assistant"
+        convo += f"{role}: {m.get('content', '')}\n"
+    convo += f"User: {message}\nAssistant:"
+
+    reply = await gemini_generate(convo, system=system, max_tokens=400, temperature=0.7)
+    if not reply:
+        await record_ai_usage("chat", "error")
+        return {"reply": wa_fallback, "session_id": req.session_id, "ai": False}
+
+    await record_ai_usage("chat", "live")
+    now_iso = datetime.now(timezone.utc).isoformat()
+    new_messages = history + [
+        {"role": "user", "content": message, "ts": now_iso},
+        {"role": "assistant", "content": reply, "ts": now_iso},
+    ]
+    await db.chat_sessions.update_one(
+        {"session_id": req.session_id},
+        {"$set": {"session_id": req.session_id, "messages": new_messages[-40:], "updated_at": now_iso}},
+        upsert=True,
+    )
+    return {"reply": reply, "session_id": req.session_id, "ai": True}
+
+
+@api_router.get("/chat/{session_id}")
+async def get_chat_history(session_id: str):
+    session = await db.chat_sessions.find_one({"session_id": session_id})
+    msgs = session.get("messages", []) if session else []
+    return {"session_id": session_id, "messages": [{"role": m.get("role"), "content": m.get("content")} for m in msgs]}
+
+
 
 @api_router.post("/orders", response_model=Order)
 async def create_order(order: OrderCreate):
