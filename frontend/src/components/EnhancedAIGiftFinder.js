@@ -263,32 +263,9 @@ export const EnhancedAIGiftFinder = () => {
         } : null
       });
       
-      if (response.data.suggestions) {
-        // Check if suggestions is a string (LLM response) or array (structured)
-        if (typeof response.data.suggestions === 'string') {
-          // Convert string response to structured format for display
-          const stringResponse = response.data.suggestions;
-          const mockStructuredSuggestions = [
-            {
-              product: {
-                id: 'ai-llm-suggestion-1',
-                name: 'AI Recommended Gift Set',
-                description: 'Personalized gifts curated by our AI based on your preferences',
-                base_price: 899,
-                image_url: 'https://images.unsplash.com/photo-1513519245088-0e12902e5a38?auto=format&fit=crop&w=400&h=300',
-                category: 'ai-curated'
-              },
-              reasoning: 'Our AI analyzed your preferences and suggests these personalized options',
-              confidence: 92,
-              aiTag: '🤖 AI Curated Selection',
-              llmResponse: stringResponse
-            }
-          ];
-          setSuggestions(mockStructuredSuggestions);
-        } else {
-          // Handle array of structured suggestions
-          setSuggestions(response.data.suggestions);
-        }
+      if (Array.isArray(response.data.suggestions) && response.data.suggestions.length > 0) {
+        // Structured suggestions from backend (real product images per card)
+        setSuggestions(response.data.suggestions);
       } else {
         throw new Error('No backend suggestions');
       }
@@ -749,7 +726,7 @@ export const EnhancedAIGiftFinder = () => {
 
                     <div className="space-y-6">
                       {suggestions.map((suggestion, index) => (
-                        <Card key={index} className="border-green-200 bg-gradient-to-r from-green-50 to-emerald-50 hover:shadow-xl transition-all">
+                        <Card key={index} data-testid={`gift-suggestion-card-${index}`} className="border-green-200 bg-gradient-to-r from-green-50 to-emerald-50 hover:shadow-xl transition-all">
                           <CardContent className="p-6">
                             <div className="flex flex-col lg:flex-row gap-6">
                               <img 
@@ -781,39 +758,23 @@ export const EnhancedAIGiftFinder = () => {
                                     <div>
                                       <div className="font-semibold text-gray-900 mb-1">Why AI Chose This:</div>
                                       <p className="text-sm text-gray-700">{suggestion.reasoning}</p>
-                                      
-                                      {/* Display LLM Response if available */}
-                                      {suggestion.llmResponse && (
-                                        <div className="mt-4 p-4 bg-purple-50 rounded-lg border border-purple-200">
-                                          <div className="font-semibold text-purple-900 mb-2 flex items-center">
-                                            <Brain className="w-4 h-4 mr-2" />
-                                            AI Detailed Recommendations:
-                                          </div>
-                                          <div className="text-sm text-purple-800 whitespace-pre-wrap">
-                                            {suggestion.llmResponse.substring(0, 500)}
-                                            {suggestion.llmResponse.length > 500 && '...'}
-                                          </div>
-                                          {suggestion.llmResponse.length > 500 && (
-                                            <Button 
-                                              variant="ghost" 
-                                              size="sm"
-                                              className="text-purple-600 hover:text-purple-700 mt-2 p-0"
-                                              onClick={() => {
-                                                // Show full response in modal or expand
-                                                alert(suggestion.llmResponse);
-                                              }}
-                                            >
-                                              View Full AI Analysis →
-                                            </Button>
-                                          )}
-                                        </div>
+                                      {suggestion.customization && (
+                                        <p className="text-sm text-gray-700 mt-2">
+                                          <span className="font-semibold text-purple-700">Personalization idea: </span>
+                                          {suggestion.customization}
+                                        </p>
                                       )}
                                     </div>
                                   </div>
                                 </div>
                                 
                                 <div className="flex items-center justify-between">
-                                  <div className="text-3xl font-bold text-gray-900">₹{suggestion.product.base_price}</div>
+                                  <div>
+                                    <div className="text-3xl font-bold text-gray-900">₹{suggestion.product.base_price}</div>
+                                    {suggestion.price_range && (
+                                      <div className="text-xs text-gray-500 mt-1">Est. range: {suggestion.price_range}</div>
+                                    )}
+                                  </div>
                                   <div className="space-x-3">
                                     <Button 
                                       className="bg-gradient-to-r from-green-500 to-emerald-500 hover:from-green-600 hover:to-emerald-600 text-white"

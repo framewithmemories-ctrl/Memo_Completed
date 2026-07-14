@@ -358,6 +358,16 @@ export const AboutUsSection = () => {
 export const ProductGrid = ({ products }) => {
   const [selectedCategory, setSelectedCategory] = useState('All');
   const { addToCart } = useCart();
+
+  useEffect(() => {
+    const handleShopFilter = (e) => {
+      const cat = e?.detail?.category;
+      if (cat) setSelectedCategory(cat);
+      setTimeout(() => document.getElementById('shop')?.scrollIntoView({ behavior: 'smooth' }), 60);
+    };
+    window.addEventListener('shop-filter', handleShopFilter);
+    return () => window.removeEventListener('shop-filter', handleShopFilter);
+  }, []);
   
   const categories = [
     { name: 'All', icon: <Gift className="w-4 h-4" /> },

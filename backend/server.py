@@ -450,7 +450,7 @@ async def get_products(category: Optional[str] = None):
     return [Product(**product) for product in products]
 
 @api_router.post("/products", response_model=Product)
-async def create_product(product: ProductCreate):
+async def create_product(product: ProductCreate, admin=Depends(require_admin)):
     product_obj = Product(**product.dict())
     await db.products.insert_one(product_obj.dict())
     return product_obj
@@ -463,7 +463,7 @@ async def get_product(product_id: str):
     return Product(**product)
 
 @api_router.post("/users", response_model=User)
-async def create_user(user: UserCreate):
+async def create_user(user: UserCreate, admin=Depends(require_admin)):
     # Check if user exists
     existing_user = await db.users.find_one({"email": user.email})
     if existing_user:
@@ -1071,7 +1071,7 @@ async def get_store_info():
 
 # Enhanced User Profile Endpoints
 @api_router.put("/users/{user_id}")
-async def update_user(user_id: str, user_data: dict):
+async def update_user(user_id: str, user_data: dict, owner=Depends(verify_user_access)):
     await db.users.update_one(
         {"id": user_id},
         {"$set": user_data}
@@ -1758,10 +1758,13 @@ async def delete_product_admin(product_id: str, admin=Depends(require_admin)):
 # Include the router in the main app
 app.include_router(api_router)
 
+_cors_origins = os.environ.get('CORS_ORIGINS', '*').split(',')
 app.add_middleware(
     CORSMiddleware,
-    allow_credentials=True,
-    allow_origins=os.environ.get('CORS_ORIGINS', '*').split(','),
+    # Auth uses Bearer tokens (not cookies). '*' origins are invalid combined with
+    # credentials, so only enable credentials when explicit origins are configured.
+    allow_credentials=_cors_origins != ['*'],
+    allow_origins=_cors_origins,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -1798,6 +1801,46 @@ async def startup_seed_admin():
             logger.info(f"Updated admin password for: {username}")
     except Exception as e:
         logger.error(f"Admin seed error: {e}")
+
+
+@app.on_event("startup")
+async def startup_create_indexes():
+    """Create indexes defensively; never crash startup on an unexpected data state."""
+    try:
+        # users.email: unique only if there are no existing duplicates
+        dupes = await db.users.aggregate(
+            [{"$group": {"_id": "$email", "n": {"$sum": 1}}}, {"$match": {"n": {"$gt": 1}}}]
+        ).to_list(1)
+        try:
+            if dupes:
+                logger.warning("Duplicate user emails present; creating NON-unique email index.")
+                await db.users.create_index("email")
+            else:
+                await db.users.create_index("email", unique=True)
+        except Exception as e:
+            logger.error(f"users.email index error: {e}")
+
+        for coll, field in [
+            (db.users, "id"),
+            (db.products, "id"),
+            (db.orders, "user_id"),
+            (db.wallet_transactions, "user_id"),
+            (db.user_photos, "user_id"),
+            (db.reviews, "approved"),
+            (db.ai_usage_log, "date"),
+            (db.admin_audit_log, "created_at"),
+        ]:
+            try:
+                await coll.create_index(field)
+            except Exception as e:
+                logger.error(f"index error ({field}): {e}")
+
+        try:
+            await db.chat_sessions.create_index("session_id", unique=True)
+        except Exception as e:
+            logger.error(f"chat_sessions index error: {e}")
+    except Exception as e:
+        logger.error(f"Index creation error: {e}")
 
 
 @app.on_event("shutdown")

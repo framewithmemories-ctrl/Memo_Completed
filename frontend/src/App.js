@@ -24,6 +24,8 @@ import { AboutUsPage } from "./components/AboutUsPage";
 import { EnhancedCheckoutPage } from "./components/EnhancedCheckoutPage";
 import { ReviewSystemEnhanced } from "./components/ReviewSystemEnhanced";
 import AdminPanel from "./components/AdminPanel";
+import ShopMegaMenu from "./components/ShopMegaMenu";
+import ChatWidget from "./components/ChatWidget";
 import { 
   Upload, 
   Sparkles, 
@@ -252,10 +254,7 @@ const Header = () => {
                 Home
                 <span className="absolute -bottom-1 left-0 w-0 h-0.5 bg-rose-600 transition-all group-hover:w-full"></span>
               </a>
-              <a href="#shop" className="text-gray-700 hover:text-rose-600 font-medium transition-colors relative group">
-                Shop
-                <span className="absolute -bottom-1 left-0 w-0 h-0.5 bg-rose-600 transition-all group-hover:w-full"></span>
-              </a>
+              <ShopMegaMenu />
               <a href="#customizer" className="text-gray-700 hover:text-rose-600 font-medium transition-colors relative group">
                 Customize
                 <span className="absolute -bottom-1 left-0 w-0 h-0.5 bg-rose-600 transition-all group-hover:w-full"></span>
@@ -1096,6 +1095,7 @@ const Home = () => {
       <TestimonialsSection />
       <Footer />
       <WhatsAppFloat />
+      <ChatWidget />
       <Toaster />
     </div>
   );

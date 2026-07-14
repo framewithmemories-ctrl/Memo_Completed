@@ -684,6 +684,12 @@ export const AdminPanel = () => {
                 </div>
               </CardHeader>
               <CardContent>
+                {aiUsage?.today && aiUsage.today.error >= 3 && (aiUsage.today.error / Math.max(1, aiUsage.today.total_calls + aiUsage.today.error)) > 0.2 && (
+                  <div className="mb-4 p-3 rounded-lg bg-amber-50 border border-amber-200 flex items-start gap-2" data-testid="ai-error-alert">
+                    <AlertTriangle className="w-4 h-4 text-amber-600 mt-0.5 flex-shrink-0" />
+                    <span className="text-sm text-amber-800">High AI error rate today ({aiUsage.today.error} errors). Check your Gemini quota/billing before scaling traffic.</span>
+                  </div>
+                )}
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
                   <div className="p-4 bg-purple-50 rounded-lg">
                     <p className="text-sm text-gray-600">Calls Today</p>
