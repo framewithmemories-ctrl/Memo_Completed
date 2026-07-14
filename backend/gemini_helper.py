@@ -52,9 +52,9 @@ async def gemini_generate(
             kwargs["system_instruction"] = system
         if json_mode:
             kwargs["response_mime_type"] = "application/json"
-        # Gemini 2.5 models "think" by default, consuming the max_output_tokens budget
+        # Flash / 2.5+ models "think" by default, consuming the max_output_tokens budget
         # and truncating the actual answer. Disable thinking so the full response is returned.
-        if "2.5" in model_name:
+        if "2.5" in model_name or "flash" in model_name.lower():
             kwargs["thinking_config"] = types.ThinkingConfig(thinking_budget=0)
         config = types.GenerateContentConfig(**kwargs)
         resp = client.models.generate_content(model=model_name, contents=prompt, config=config)
