@@ -54,10 +54,23 @@ export const EnhancedCheckoutPage = ({ onClose }) => {
   const [showLiveUpdates, setShowLiveUpdates] = useState(true);
   const [placedOrder, setPlacedOrder] = useState(null);
   const [shopWhatsapp, setShopWhatsapp] = useState('918148040148');
+  const [paymentConfig, setPaymentConfig] = useState({ mode: 'mock', razorpay_key_id: '' });
 
   useEffect(() => {
     axios.get(`${API}/config`).then((r) => setShopWhatsapp(r.data.shop_whatsapp)).catch(() => {});
+    axios.get(`${API}/payments/config`).then((r) => setPaymentConfig(r.data)).catch(() => {});
   }, []);
+
+  // Dynamically load the Razorpay Checkout script (only when needed)
+  const loadRazorpayScript = () =>
+    new Promise((resolve) => {
+      if (window.Razorpay) return resolve(true);
+      const script = document.createElement('script');
+      script.src = 'https://checkout.razorpay.com/v1/checkout.js';
+      script.onload = () => resolve(true);
+      script.onerror = () => resolve(false);
+      document.body.appendChild(script);
+    });
 
   // Load user profile (auth) and wallet (backend) on mount
   useEffect(() => {
@@ -240,28 +253,105 @@ export const EnhancedCheckoutPage = ({ onClose }) => {
         }
       }
 
-      // Snapshot for the invoice (cart is cleared right after)
-      setPlacedOrder({
-        id: order.id,
-        items: cartItems,
-        customer: { ...formData },
-        totals,
-        createdAt: order.created_at,
-        pointsEarned: order.points_earned || 0,
-      });
+      // Online payment (Razorpay) flow
+      if (formData.paymentMethod === 'razorpay') {
+        await handleRazorpayPayment(order, totals);
+        return;
+      }
 
-      clearCart();
-
-      toast.success('🎉 Order placed successfully!', {
-        description: `Order ID: ${order.id.substring(0, 8).toUpperCase()}`,
-        duration: 5000,
-      });
+      finalizeOrder(order, totals);
     } catch (error) {
       console.error('Order submission error:', error);
       toast.error(error.response?.data?.detail || 'Failed to place order. Please try again.');
     } finally {
       setIsSubmitting(false);
     }
+  };
+
+  // Finalize: snapshot invoice, clear cart, show confirmation
+  const finalizeOrder = (order, totals) => {
+    setPlacedOrder({
+      id: order.id,
+      items: cartItems,
+      customer: { ...formData },
+      totals,
+      createdAt: order.created_at,
+      pointsEarned: order.points_earned || 0,
+    });
+    clearCart();
+    toast.success('🎉 Order placed successfully!', {
+      description: `Order ID: ${order.id.substring(0, 8).toUpperCase()}`,
+      duration: 5000,
+    });
+  };
+
+  // Verify payment with backend, then finalize
+  const verifyAndFinalize = async (order, totals, rzpResponse = {}) => {
+    try {
+      await axios.post(`${API}/payments/verify`, {
+        order_id: order.id,
+        razorpay_payment_id: rzpResponse.razorpay_payment_id || null,
+        razorpay_order_id: rzpResponse.razorpay_order_id || null,
+        razorpay_signature: rzpResponse.razorpay_signature || null,
+      });
+      toast.success('✅ Payment verified!');
+      finalizeOrder(order, totals);
+    } catch (err) {
+      console.error('Payment verification failed:', err);
+      toast.error(err.response?.data?.detail || 'Payment verification failed. Please contact support.');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  // Razorpay Checkout: mock mode simulates instant success; production opens the modal
+  const handleRazorpayPayment = async (order, totals) => {
+    // MOCK MODE: simulate a successful payment so the full flow is testable in-browser
+    if (paymentConfig.mode !== 'production' || !paymentConfig.razorpay_key_id) {
+      toast.info('Mock payment mode — simulating a successful Razorpay payment...');
+      await verifyAndFinalize(order, totals, {});
+      return;
+    }
+
+    // PRODUCTION MODE: open the real Razorpay Checkout modal
+    const loaded = await loadRazorpayScript();
+    if (!loaded) {
+      toast.error('Failed to load Razorpay. Please try again.');
+      setIsSubmitting(false);
+      return;
+    }
+
+    const options = {
+      key: paymentConfig.razorpay_key_id,
+      amount: Math.round(totals.final * 100), // paise
+      currency: 'INR',
+      name: 'Memories',
+      description: `Order #${order.id.substring(0, 8).toUpperCase()}`,
+      // NOTE: For production, generate an order on Razorpay via a backend endpoint
+      // and pass order_id here. Signature is verified by POST /api/payments/verify.
+      handler: (response) => {
+        verifyAndFinalize(order, totals, response);
+      },
+      prefill: {
+        name: formData.name,
+        email: formData.email,
+        contact: formData.phone,
+      },
+      theme: { color: '#e11d48' },
+      modal: {
+        ondismiss: () => {
+          toast.error('Payment cancelled.');
+          setIsSubmitting(false);
+        },
+      },
+    };
+
+    const rzp = new window.Razorpay(options);
+    rzp.on('payment.failed', () => {
+      toast.error('Payment failed. Please try again.');
+      setIsSubmitting(false);
+    });
+    rzp.open();
   };
 
   // Share order summary on WhatsApp
@@ -593,12 +683,25 @@ export const EnhancedCheckoutPage = ({ onClose }) => {
                     value={formData.paymentMethod} 
                     onValueChange={(value) => setFormData(prev => ({...prev, paymentMethod: value}))}
                   >
-                    <div className="flex items-center space-x-2 p-4 border rounded-lg">
+                    <div className="flex items-center space-x-2 p-4 border rounded-lg" data-testid="payment-cod-option">
                       <RadioGroupItem value="cod" id="cod" />
                       <div className="flex-1">
                         <Label htmlFor="cod" className="font-medium">Cash on Delivery</Label>
                         <p className="text-sm text-gray-600">Pay when you receive your order</p>
                       </div>
+                    </div>
+
+                    <div className="flex items-center space-x-2 p-4 border rounded-lg" data-testid="payment-razorpay-option">
+                      <RadioGroupItem value="razorpay" id="razorpay" />
+                      <div className="flex-1">
+                        <Label htmlFor="razorpay" className="font-medium">Pay Online (Razorpay)</Label>
+                        <p className="text-sm text-gray-600">
+                          {paymentConfig.mode === 'production'
+                            ? 'UPI, Cards, NetBanking & Wallets'
+                            : 'Test mode — simulates a successful payment'}
+                        </p>
+                      </div>
+                      <CreditCard className="w-5 h-5 text-gray-400" />
                     </div>
                     
                     {userWallet && (userWallet.balance > 0) && (
@@ -742,6 +845,7 @@ export const EnhancedCheckoutPage = ({ onClose }) => {
                         onClick={handleSubmit}
                         className="w-full bg-gradient-to-r from-rose-500 to-pink-500 hover:from-rose-600 hover:to-pink-600"
                         disabled={isSubmitting}
+                        data-testid="place-order-button"
                       >
                         {isSubmitting ? (
                           <>
@@ -751,7 +855,7 @@ export const EnhancedCheckoutPage = ({ onClose }) => {
                         ) : (
                           <>
                             <CreditCard className="w-4 h-4 mr-2" />
-                            Place Order ₹{getFinalTotal()}
+                            {formData.paymentMethod === 'razorpay' ? 'Pay Now' : 'Place Order'} ₹{getFinalTotal()}
                           </>
                         )}
                       </Button>

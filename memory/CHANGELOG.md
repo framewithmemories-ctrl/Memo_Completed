@@ -69,3 +69,11 @@ When set, /api/google-reviews returns configured=true with live top-5 reviews; o
 - Added GET /api/payments/config (exposes mode + key_id in production only).
 - Added .env: PAYMENT_MODE="mock", RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET.
 - Imported native hmac (no razorpay SDK). Verified via curl: mock verify->processing, 404 unknown order, HMAC compare_digest logic confirmed.
+
+## 2026-06 — Razorpay frontend wiring
+- EnhancedCheckoutPage.js: added "Pay Online (Razorpay)" payment method.
+  - Loads window.Razorpay checkout.js dynamically (production only).
+  - Mock mode (PAYMENT_MODE=mock / no key): simulates success instantly.
+  - On success calls POST /api/payments/verify {order_id, razorpay_payment_id, razorpay_order_id, razorpay_signature} then shows invoice.
+  - Fetches GET /api/payments/config on mount for mode + key_id.
+- Button label switches to "Pay Now" for online payments. Verified webpack compiled successfully.
