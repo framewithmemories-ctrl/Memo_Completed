@@ -77,3 +77,9 @@ When set, /api/google-reviews returns configured=true with live top-5 reviews; o
   - On success calls POST /api/payments/verify {order_id, razorpay_payment_id, razorpay_order_id, razorpay_signature} then shows invoice.
   - Fetches GET /api/payments/config on mount for mode + key_id.
 - Button label switches to "Pay Now" for online payments. Verified webpack compiled successfully.
+
+## 2026-07 — Live MongoDB Atlas wiring
+- Pointed backend MONGO_URL to Atlas (cluster0.og8ervc), DB_NAME="memories". Password URL-encoded (@ -> %40).
+- Required Atlas Network Access allow-list 0.0.0.0/0 (initial TLSV1_ALERT_INTERNAL_ERROR was IP-block, resolved after whitelist).
+- Verified: connected to MongoDB 8.0.27, admin account seeded, /api/config responds from Atlas.
+- A3 startup index script built all indexes on live cluster (23 total incl _id_; 13 custom): users(email unique,id), products(id), orders(user_id), wallet_transactions(user_id), user_photos(user_id), reviews(approved), ai_usage_log(date), admin_audit_log(created_at), chat_sessions(session_id unique,user_id), password_reset_tokens(expires_at TTL,email).
