@@ -17,6 +17,7 @@ import json
 import secrets
 import string
 import hashlib
+import hmac
 from gemini_helper import gemini_generate, gemini_available
 import base64
 import io
@@ -48,6 +49,11 @@ api_router = APIRouter(prefix="/api")
 JWT_SECRET = os.environ["JWT_SECRET"]
 JWT_ALG = "HS256"
 security = HTTPBearer(auto_error=False)
+
+# ============================ Payment (Razorpay) config ============================
+PAYMENT_MODE = os.environ.get("PAYMENT_MODE", "mock")
+RAZORPAY_KEY_ID = os.environ.get("RAZORPAY_KEY_ID", "mock")
+RAZORPAY_KEY_SECRET = os.environ.get("RAZORPAY_KEY_SECRET", "mock")
 
 
 def hash_password(pw: str) -> str:
@@ -854,6 +860,58 @@ async def create_order(order: OrderCreate):
             )
     
     return order_obj
+
+class PaymentVerifyRequest(BaseModel):
+    order_id: str
+    razorpay_order_id: Optional[str] = None
+    razorpay_payment_id: Optional[str] = None
+    razorpay_signature: Optional[str] = None
+
+
+@api_router.get("/payments/config")
+async def get_payment_config():
+    """Expose non-sensitive payment config for the frontend checkout."""
+    return {"mode": PAYMENT_MODE, "razorpay_key_id": RAZORPAY_KEY_ID if PAYMENT_MODE == "production" else ""}
+
+
+@api_router.post("/payments/verify")
+async def verify_payment(payload: PaymentVerifyRequest):
+    """Verify a Razorpay payment signature and move the order to 'processing'.
+
+    - mock mode: bypass signature verification (for local/testing).
+    - production mode: verify HMAC SHA256 signature over
+      f"{razorpay_order_id}|{razorpay_payment_id}" using RAZORPAY_KEY_SECRET.
+    """
+    order = await db.orders.find_one({"id": payload.order_id})
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+
+    if PAYMENT_MODE == "production":
+        if not (payload.razorpay_order_id and payload.razorpay_payment_id and payload.razorpay_signature):
+            raise HTTPException(status_code=400, detail="Missing Razorpay payment fields")
+
+        message = f"{payload.razorpay_order_id}|{payload.razorpay_payment_id}"
+        expected_signature = hmac.new(
+            bytes(RAZORPAY_KEY_SECRET, "utf-8"),
+            bytes(message, "utf-8"),
+            hashlib.sha256,
+        ).hexdigest()
+
+        if not hmac.compare_digest(expected_signature, payload.razorpay_signature):
+            raise HTTPException(status_code=400, detail="Payment signature verification failed")
+
+    await db.orders.update_one(
+        {"id": payload.order_id},
+        {"$set": {
+            "status": "processing",
+            "payment_status": "paid",
+            "razorpay_order_id": payload.razorpay_order_id,
+            "razorpay_payment_id": payload.razorpay_payment_id,
+            "updated_at": datetime.now(timezone.utc),
+        }},
+    )
+    return {"success": True, "order_id": payload.order_id, "status": "processing", "mode": PAYMENT_MODE}
+
 
 @api_router.get("/orders/{user_id}")
 async def get_user_orders(user_id: str):

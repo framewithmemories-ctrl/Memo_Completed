@@ -61,3 +61,11 @@ Inject into /app/backend/.env then `sudo supervisorctl restart backend`:
 - GOOGLE_PLACE_ID="<your business Place ID>"
 - GOOGLE_REVIEWS_URL="<optional: direct link to your Google reviews>"
 When set, /api/google-reviews returns configured=true with live top-5 reviews; otherwise it serves mock data.
+
+## 2026-06 — Razorpay payment adapter
+- Added POST /api/payments/verify (backend/server.py): mock + production modes.
+  - mock: bypasses signature, sets order status=processing, payment_status=paid.
+  - production: HMAC-SHA256 over "razorpay_order_id|razorpay_payment_id" using RAZORPAY_KEY_SECRET; 400 on mismatch.
+- Added GET /api/payments/config (exposes mode + key_id in production only).
+- Added .env: PAYMENT_MODE="mock", RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET.
+- Imported native hmac (no razorpay SDK). Verified via curl: mock verify->processing, 404 unknown order, HMAC compare_digest logic confirmed.
