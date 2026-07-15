@@ -69,7 +69,7 @@ export const ReviewSystemEnhanced = () => {
   const loadGoogleReviews = async () => {
     try {
       const res = await axios.get(`${API}/google-reviews`);
-      setGoogleData(res.data);
+      setGoogleData(prev => ({ ...prev, ...(res.data || {}), reviews: Array.isArray(res.data?.reviews) ? res.data.reviews : [] }));
     } catch (error) {
       console.error('Error loading Google reviews:', error);
     }
@@ -104,11 +104,12 @@ export const ReviewSystemEnhanced = () => {
       }
       
       const response = await axios.get(`${API}/reviews?${params}`);
-      
+      const fetchedReviews = Array.isArray(response.data?.reviews) ? response.data.reviews : [];
+
       if (reset) {
-        setReviews(response.data.reviews);
+        setReviews(fetchedReviews);
       } else {
-        setReviews(prev => [...prev, ...response.data.reviews]);
+        setReviews(prev => [...prev, ...fetchedReviews]);
       }
       
       setPagination(prev => ({
