@@ -33,3 +33,11 @@ Status at audit time. Priority: **P0** = blocks the current sprint / user‑repo
 - [ ] **P2 — Product detail pages** + product image upload (object storage) in admin.
 - [ ] **P2 — Product wishlist**, guest→account order linking.
 - [ ] **P2 — Admin CSV export** (Orders/Users buttons are stubs) and functional Settings toggles.
+
+## Deferred P1 Backlog (as of 2026-07)
+- [ ] Razorpay production checkout: add backend endpoint to CREATE a Razorpay order (returns razorpay_order_id) before opening the modal. Frontend adapter + POST /api/payments/verify are already in place (mock mode working).
+- [ ] SMTP email delivery (Resend/SendGrid) for /api/auth/forgot-password (currently logs token server-side).
+
+## Deployment configs added (2026-07)
+- frontend/vercel.json — SPA rewrite: all non-static routes -> /index.html.
+- backend/Procfile — `web: uvicorn server:app --host 0.0.0.0 --port $PORT` (Render binds via $PORT; no app.run in server.py, so CLI controls the port).

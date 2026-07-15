@@ -328,10 +328,10 @@ const AboutUsPopup = () => {
   const [showPopup, setShowPopup] = useState(false);
 
   useEffect(() => {
-    const hasVisited = localStorage.getItem('memoriesVisited');
-    if (!hasVisited) {
+    const hasSeenWelcome = localStorage.getItem('has_seen_welcome');
+    if (!hasSeenWelcome) {
       setTimeout(() => setShowPopup(true), 2000); // Show after 2 seconds
-      localStorage.setItem('memoriesVisited', 'true');
+      localStorage.setItem('has_seen_welcome', 'true');
     }
   }, []);
 
