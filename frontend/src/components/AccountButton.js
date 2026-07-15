@@ -85,6 +85,30 @@ export const AccountButton = () => {
   const [loginForm, setLoginForm] = useState({ email: '', password: '' });
   const [registerForm, setRegisterForm] = useState({ name: '', email: '', password: '', phone: '' });
   const [pwdForm, setPwdForm] = useState({ current: '', next: '', confirm: '' });
+  const [showForgot, setShowForgot] = useState(false);
+  const [forgotForm, setForgotForm] = useState({ email: '', phone: '', next: '', confirm: '' });
+
+  const handleForgotSubmit = async (e) => {
+    e.preventDefault();
+    if (forgotForm.next.length < 6) { toast.error('New password must be at least 6 characters'); return; }
+    if (forgotForm.next !== forgotForm.confirm) { toast.error('Passwords do not match'); return; }
+    setLoading(true);
+    try {
+      await axios.post(`${API}/auth/reset-password`, {
+        email: forgotForm.email.trim().toLowerCase(),
+        phone: forgotForm.phone.trim(),
+        new_password: forgotForm.next,
+      });
+      toast.success('Password reset! Please log in with your new password. 🔐');
+      setShowForgot(false);
+      setForgotForm({ email: '', phone: '', next: '', confirm: '' });
+      setMode('login');
+    } catch (err) {
+      toast.error(formatApiError(err.response?.data?.detail) || 'Reset failed. Check your email and registered phone.');
+    } finally {
+      setLoading(false);
+    }
+  };
 
   const handleLogin = async (e) => {
     e.preventDefault();
@@ -173,6 +197,49 @@ export const AccountButton = () => {
                 </DialogDescription>
               </DialogHeader>
 
+              {showForgot ? (
+                <form onSubmit={handleForgotSubmit} className="space-y-4 mt-4" data-testid="forgot-password-form">
+                  <p className="text-sm text-gray-600">
+                    Reset your password using your registered email and phone number.
+                  </p>
+                  <div>
+                    <Label htmlFor="forgot-email">Email</Label>
+                    <Input id="forgot-email" type="email" required data-testid="forgot-email-input"
+                      value={forgotForm.email}
+                      onChange={(e) => setForgotForm({ ...forgotForm, email: e.target.value })}
+                      placeholder="you@example.com" className="mt-1" />
+                  </div>
+                  <div>
+                    <Label htmlFor="forgot-phone">Registered phone number</Label>
+                    <Input id="forgot-phone" type="tel" required data-testid="forgot-phone-input"
+                      value={forgotForm.phone}
+                      onChange={(e) => setForgotForm({ ...forgotForm, phone: e.target.value })}
+                      placeholder="Phone number on your account" className="mt-1" />
+                  </div>
+                  <div>
+                    <Label htmlFor="forgot-next">New password</Label>
+                    <Input id="forgot-next" type="password" required data-testid="forgot-new-password-input"
+                      value={forgotForm.next}
+                      onChange={(e) => setForgotForm({ ...forgotForm, next: e.target.value })}
+                      placeholder="At least 6 characters" className="mt-1" />
+                  </div>
+                  <div>
+                    <Label htmlFor="forgot-confirm">Confirm new password</Label>
+                    <Input id="forgot-confirm" type="password" required data-testid="forgot-confirm-password-input"
+                      value={forgotForm.confirm}
+                      onChange={(e) => setForgotForm({ ...forgotForm, confirm: e.target.value })}
+                      placeholder="Re-enter new password" className="mt-1" />
+                  </div>
+                  <Button type="submit" disabled={loading} data-testid="forgot-submit-button"
+                    className="w-full bg-gradient-to-r from-rose-500 to-pink-500 hover:from-rose-600 hover:to-pink-600">
+                    {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Reset Password'}
+                  </Button>
+                  <button type="button" onClick={() => setShowForgot(false)} data-testid="forgot-back-button"
+                    className="w-full text-sm text-gray-500 hover:text-rose-600 transition-colors">
+                    ← Back to login
+                  </button>
+                </form>
+              ) : (
               <Tabs value={mode} onValueChange={setMode} className="mt-2">
                 <TabsList className="grid grid-cols-2 w-full">
                   <TabsTrigger value="login" data-testid="tab-login">Login</TabsTrigger>
@@ -199,6 +266,10 @@ export const AccountButton = () => {
                       className="w-full bg-gradient-to-r from-rose-500 to-pink-500 hover:from-rose-600 hover:to-pink-600">
                       {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Login'}
                     </Button>
+                    <button type="button" onClick={() => setShowForgot(true)} data-testid="forgot-password-link"
+                      className="w-full text-center text-sm text-gray-500 hover:text-rose-600 transition-colors">
+                      Forgot Password?
+                    </button>
                   </form>
                 </TabsContent>
 
@@ -239,6 +310,7 @@ export const AccountButton = () => {
                   </form>
                 </TabsContent>
               </Tabs>
+              )}
             </>
           ) : user.must_change_password ? (
             <>

@@ -35,13 +35,15 @@ async def gemini_generate(
     json_mode: bool = False,
     max_tokens: int = 1024,
     temperature: float = 0.7,
+    model: Optional[str] = None,
 ) -> Optional[str]:
     """Generate text with Gemini. Retries on transient errors and falls back to a
-    secondary model. Returns the text, or None on any failure (callers handle fallback)."""
+    secondary model. Returns the text, or None on any failure (callers handle fallback).
+    Pass `model` to override the primary model for this call (e.g. a faster flash model)."""
     client = _get_client()
     if client is None:
         return None
-    primary = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash").strip() or "gemini-2.5-flash"
+    primary = (model or os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")).strip() or "gemini-2.5-flash"
     fallback = os.environ.get("GEMINI_FALLBACK_MODEL", "gemini-2.5-flash-lite").strip() or "gemini-2.5-flash-lite"
     models = [primary] if primary == fallback else [primary, fallback]
 

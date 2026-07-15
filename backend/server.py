@@ -1,4 +1,4 @@
-from fastapi import FastAPI, APIRouter, UploadFile, File, HTTPException, Depends
+from fastapi import FastAPI, APIRouter, UploadFile, File, HTTPException, Depends, Header
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
@@ -16,6 +16,7 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 import json
 import secrets
 import string
+import hashlib
 from gemini_helper import gemini_generate, gemini_available
 import base64
 import io
@@ -710,14 +711,25 @@ class ChatRequest(BaseModel):
 
 
 @api_router.post("/chat")
-async def chat_assistant(req: ChatRequest):
+async def chat_assistant(req: ChatRequest, authorization: Optional[str] = Header(default=None)):
     """Customer support / shopping assistant chat (Gemini), grounded in the shop catalog.
-    Multi-turn via session_id; recent history is persisted in chat_sessions."""
+    Multi-turn via session_id; recent history is persisted in chat_sessions.
+    If a valid user Bearer token is present, the session is tied to that user for history."""
     message = (req.message or "").strip()
     if not message:
         raise HTTPException(status_code=400, detail="Message is required")
     if len(message) > 1000:
         message = message[:1000]
+
+    # Optional auth: associate the session with a logged-in user (for persistent history)
+    user_id = None
+    if authorization and authorization.startswith("Bearer "):
+        try:
+            payload = decode_token(authorization[7:])
+            if payload.get("role") == "user":
+                user_id = payload.get("sub")
+        except Exception:
+            user_id = None
 
     wa_fallback = ("Our AI assistant is taking a quick break. Please WhatsApp us at +91 81480 40148 "
                    "or call us and our team will help you right away! 🎁")
@@ -767,7 +779,9 @@ async def chat_assistant(req: ChatRequest):
         convo += f"{role}: {m.get('content', '')}\n"
     convo += f"User: {message}\nAssistant:"
 
-    reply = await gemini_generate(convo, system=system, max_tokens=400, temperature=0.7)
+    # Chat is pinned to the fastest stable flash tier (Flash-Lite) to minimise latency.
+    reply = await gemini_generate(convo, system=system, max_tokens=400, temperature=0.7,
+                                  model="gemini-flash-lite-latest")
     if not reply:
         await record_ai_usage("chat", "error")
         return {"reply": wa_fallback, "session_id": req.session_id, "ai": False}
@@ -778,12 +792,26 @@ async def chat_assistant(req: ChatRequest):
         {"role": "user", "content": message, "ts": now_iso},
         {"role": "assistant", "content": reply, "ts": now_iso},
     ]
+    set_doc = {"session_id": req.session_id, "messages": new_messages[-40:], "updated_at": now_iso}
+    if user_id:
+        set_doc["user_id"] = user_id
     await db.chat_sessions.update_one(
         {"session_id": req.session_id},
-        {"$set": {"session_id": req.session_id, "messages": new_messages[-40:], "updated_at": now_iso}},
+        {"$set": set_doc},
         upsert=True,
     )
     return {"reply": reply, "session_id": req.session_id, "ai": True}
+
+
+@api_router.get("/chat/history")
+async def get_user_chat_history(current=Depends(get_current_user)):
+    """Authenticated: return the logged-in user's saved chat messages (most recent sessions)."""
+    sessions = await db.chat_sessions.find({"user_id": current["id"]}).sort("updated_at", -1).to_list(20)
+    messages = []
+    for s in reversed(sessions):
+        for m in s.get("messages", []):
+            messages.append({"role": m.get("role"), "content": m.get("content")})
+    return {"messages": messages}
 
 
 @api_router.get("/chat/{session_id}")
@@ -1325,6 +1353,96 @@ async def login(req: LoginRequest):
     return {"token": token, "user": User(**user).dict()}
 
 
+class ForgotPasswordRequest(BaseModel):
+    email: str
+
+
+class ResetPasswordRequest(BaseModel):
+    email: str
+    new_password: str
+    token: Optional[str] = None   # from forgot-password (logged to server)
+    phone: Optional[str] = None   # OR registered-phone verification (no SMTP path)
+
+
+def _hash_token(raw: str) -> str:
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+@api_router.post("/auth/forgot-password")
+async def forgot_password(req: ForgotPasswordRequest):
+    """Unauthenticated. Generates a short-lived reset token, stores it hashed with a TTL
+    expiry, and logs it to the server (no SMTP configured). Always returns a generic
+    response so it never reveals whether an email is registered."""
+    email = (req.email or "").strip().lower()
+    generic = {"success": True,
+               "message": "If an account exists for that email, a reset option is available. "
+                          "You can reset using your registered phone number."}
+    user = await db.users.find_one({"email": email})
+    if user:
+        raw_token = secrets.token_urlsafe(32)
+        expires_at = datetime.now(timezone.utc) + timedelta(hours=1)
+        await db.password_reset_tokens.insert_one({
+            "user_id": user["id"],
+            "email": email,
+            "token_hash": _hash_token(raw_token),
+            "used": False,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "expires_at": expires_at,
+        })
+        # No SMTP: log the token so it can be retrieved from server logs during debugging.
+        logger.warning(f"[PASSWORD RESET] token for {email} (valid 1h): {raw_token}")
+    return generic
+
+
+@api_router.post("/auth/reset-password")
+async def reset_password(req: ResetPasswordRequest):
+    """Unauthenticated self-service reset. Accepts EITHER a valid reset token (from
+    forgot-password) OR the user's registered phone number as lightweight verification."""
+    email = (req.email or "").strip().lower()
+    if len(req.new_password) < 6:
+        raise HTTPException(status_code=400, detail="Password must be at least 6 characters")
+    if len(req.new_password.encode("utf-8")) > 72:
+        raise HTTPException(status_code=400, detail="Password must be 72 bytes or fewer")
+
+    user = await db.users.find_one({"email": email})
+    invalid = HTTPException(status_code=400, detail="Verification failed. Check your email and phone/token and try again.")
+    if not user:
+        raise invalid
+
+    verified = False
+    token_doc = None
+    if req.token:
+        token_doc = await db.password_reset_tokens.find_one({
+            "email": email, "token_hash": _hash_token(req.token), "used": False,
+        })
+        if token_doc:
+            exp_dt = token_doc.get("expires_at")
+            if isinstance(exp_dt, datetime):
+                if exp_dt.tzinfo is None:
+                    exp_dt = exp_dt.replace(tzinfo=timezone.utc)
+                if exp_dt >= datetime.now(timezone.utc):
+                    verified = True
+    if not verified and req.phone:
+        registered = (user.get("phone") or "").strip()
+        supplied = req.phone.strip()
+        # compare last 10 digits to tolerate country-code/formatting differences
+        norm = lambda s: "".join(ch for ch in s if ch.isdigit())[-10:]
+        if registered and norm(registered) and norm(registered) == norm(supplied):
+            verified = True
+
+    if not verified:
+        raise invalid
+
+    await db.users.update_one(
+        {"id": user["id"]},
+        {"$set": {"password_hash": hash_password(req.new_password), "must_change_password": False}},
+    )
+    if token_doc:
+        await db.password_reset_tokens.update_one({"_id": token_doc["_id"]}, {"$set": {"used": True}})
+    await db.password_reset_tokens.update_many({"email": email, "used": False}, {"$set": {"used": True}})
+    return {"success": True, "message": "Password updated. You can now log in with your new password."}
+
+
 class ChangePasswordRequest(BaseModel):
     current_password: str
     new_password: str
@@ -1855,6 +1973,15 @@ async def startup_create_indexes():
             await db.chat_sessions.create_index("session_id", unique=True)
         except Exception as e:
             logger.error(f"chat_sessions index error: {e}")
+        try:
+            await db.chat_sessions.create_index("user_id")
+        except Exception as e:
+            logger.error(f"chat_sessions user_id index error: {e}")
+        try:
+            await db.password_reset_tokens.create_index("expires_at", expireAfterSeconds=0)
+            await db.password_reset_tokens.create_index("email")
+        except Exception as e:
+            logger.error(f"password_reset_tokens index error: {e}")
     except Exception as e:
         logger.error(f"Index creation error: {e}")
 

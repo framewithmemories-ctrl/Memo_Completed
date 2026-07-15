@@ -1,31 +1,35 @@
 import React, { useState, useRef, useEffect } from 'react';
 import axios from 'axios';
 import { MessageCircle, X, Send, Loader2 } from 'lucide-react';
+import { useAuth } from '../context/AuthContext';
 
 const API = `${process.env.REACT_APP_BACKEND_URL}/api`;
+const GUEST_KEY = 'memoChatSession';
 
-const getSessionId = () => {
-  let id = localStorage.getItem('memoChatSession');
+const getGuestSession = () => {
+  let id = localStorage.getItem(GUEST_KEY);
   if (!id) {
     id = (crypto.randomUUID && crypto.randomUUID()) || `sess-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-    localStorage.setItem('memoChatSession', id);
+    localStorage.setItem(GUEST_KEY, id);
   }
   return id;
 };
 
 const WELCOME = {
   role: 'assistant',
-  content: "Hi! I'm Memo 👋 your gift assistant at Memories. Ask me for gift ideas, product info, pricing or delivery — how can I help?",
+  content: "Hi! I'm Memo 👋 your gift assistant at Memories. Ask me for gift ideas, product info, pricing, hours or directions — how can I help?",
 };
 
 export const ChatWidget = () => {
+  const { user, isAuthenticated, token } = useAuth();
   const [open, setOpen] = useState(false);
   const [messages, setMessages] = useState([WELCOME]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
-  const sessionId = useRef(getSessionId());
   const scrollRef = useRef(null);
-  const loadedRef = useRef(false);
+
+  const authCfg = token ? { headers: { Authorization: `Bearer ${token}` } } : {};
+  const currentSession = () => (isAuthenticated && user ? `u-${user.id}` : getGuestSession());
 
   useEffect(() => {
     if (open && scrollRef.current) {
@@ -33,17 +37,29 @@ export const ChatWidget = () => {
     }
   }, [messages, open]);
 
+  // On open: logged-in users load their saved history; guests always start clean.
   useEffect(() => {
-    if (open && !loadedRef.current) {
-      loadedRef.current = true;
-      axios.get(`${API}/chat/${sessionId.current}`)
+    if (!open) return;
+    if (isAuthenticated && user) {
+      axios.get(`${API}/chat/history`, authCfg)
         .then((res) => {
           const hist = res.data?.messages || [];
-          if (hist.length > 0) setMessages([WELCOME, ...hist]);
+          setMessages(hist.length ? [WELCOME, ...hist] : [WELCOME]);
         })
-        .catch(() => {});
+        .catch(() => setMessages([WELCOME]));
+    } else {
+      setMessages([WELCOME]);
     }
   }, [open]);
+
+  const handleClose = () => {
+    setOpen(false);
+    // Guests: closing wipes the session so reopening is a fresh, clean chat.
+    if (!isAuthenticated) {
+      localStorage.removeItem(GUEST_KEY);
+      setMessages([WELCOME]);
+    }
+  };
 
   const send = async () => {
     const text = input.trim();
@@ -52,7 +68,7 @@ export const ChatWidget = () => {
     setInput('');
     setLoading(true);
     try {
-      const res = await axios.post(`${API}/chat`, { session_id: sessionId.current, message: text });
+      const res = await axios.post(`${API}/chat`, { session_id: currentSession(), message: text }, authCfg);
       setMessages((m) => [...m, { role: 'assistant', content: res.data.reply }]);
     } catch (e) {
       setMessages((m) => [...m, {
@@ -96,10 +112,12 @@ export const ChatWidget = () => {
               </div>
               <div>
                 <div className="font-semibold leading-tight">Memo · Gift Assistant</div>
-                <div className="text-[11px] text-white/80">Usually replies instantly</div>
+                <div className="text-[11px] text-white/80">
+                  {isAuthenticated ? 'Your chats are saved' : 'Usually replies instantly'}
+                </div>
               </div>
             </div>
-            <button onClick={() => setOpen(false)} data-testid="chat-close-button" aria-label="Close chat" className="p-1 hover:bg-white/20 rounded-lg transition-colors">
+            <button onClick={handleClose} data-testid="chat-close-button" aria-label="Close chat" className="p-1 hover:bg-white/20 rounded-lg transition-colors">
               <X className="w-5 h-5" />
             </button>
           </div>
@@ -107,7 +125,7 @@ export const ChatWidget = () => {
           <div ref={scrollRef} className="flex-1 overflow-y-auto p-4 space-y-3 bg-gray-50">
             {messages.map((m, i) => (
               <div key={i} data-testid={`chat-message-${m.role}`} className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-                <div className={`max-w-[80%] px-3 py-2 rounded-2xl text-sm whitespace-pre-wrap ${m.role === 'user' ? 'bg-rose-500 text-white rounded-br-sm' : 'bg-white text-gray-800 border border-gray-200 rounded-bl-sm'}`}>
+                <div className={`max-w-[80%] px-3 py-2 rounded-2xl text-sm whitespace-pre-wrap break-words ${m.role === 'user' ? 'bg-rose-500 text-white rounded-br-sm' : 'bg-white text-gray-800 border border-gray-200 rounded-bl-sm'}`}>
                   {m.content}
                 </div>
               </div>
@@ -126,7 +144,7 @@ export const ChatWidget = () => {
               value={input}
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={onKeyDown}
-              placeholder="Ask about gifts, pricing, delivery…"
+              placeholder="Ask about gifts, pricing, hours, directions…"
               data-testid="chat-input"
               className="flex-1 px-3 py-2 text-sm border border-gray-200 rounded-full focus:outline-none focus:ring-2 focus:ring-purple-300"
             />
