@@ -120,7 +120,7 @@ export const ReviewSystemEnhanced = () => {
       
       // Update stats if available
       if (response.data.rating_stats) {
-        setReviewStats(response.data.rating_stats);
+        setReviewStats(prev => ({ ...prev, ...response.data.rating_stats, rating_distribution: { ...prev.rating_distribution, ...(response.data.rating_stats.rating_distribution || {}) } }));
       }
       
     } catch (error) {
@@ -157,7 +157,7 @@ export const ReviewSystemEnhanced = () => {
   const loadReviewStats = async () => {
     try {
       const response = await axios.get(`${API}/reviews/stats`);
-      setReviewStats(response.data);
+      setReviewStats(prev => ({ ...prev, ...(response.data || {}), rating_distribution: { ...prev.rating_distribution, ...(response.data?.rating_distribution || {}) } }));
     } catch (error) {
       console.error('Error loading review stats:', error);
       // Keep default stats
@@ -323,10 +323,10 @@ export const ReviewSystemEnhanced = () => {
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
         <div className="text-center">
           <div className="text-4xl font-bold text-rose-600 mb-2">
-            {reviewStats.average_rating.toFixed(1)}
+            {Number(reviewStats.average_rating ?? 0).toFixed(1)}
           </div>
           <div className="flex justify-center mb-2">
-            {renderStars(Math.round(reviewStats.average_rating))}
+            {renderStars(Math.round(reviewStats.average_rating ?? 0))}
           </div>
           <div className="text-gray-600 text-sm">
             {reviewStats.total_reviews} review{reviewStats.total_reviews !== 1 ? 's' : ''}
@@ -342,20 +342,20 @@ export const ReviewSystemEnhanced = () => {
                   className="bg-yellow-400 h-2 rounded-full"
                   style={{ 
                     width: `${reviewStats.total_reviews > 0 
-                      ? (reviewStats.rating_distribution[stars.toString()] / reviewStats.total_reviews) * 100 
+                      ? ((reviewStats.rating_distribution?.[stars.toString()] || 0) / reviewStats.total_reviews) * 100 
                       : 0}%` 
                   }}
                 ></div>
               </div>
               <span className="text-sm text-gray-600 w-8">
-                {reviewStats.rating_distribution[stars.toString()] || 0}
+                {reviewStats.rating_distribution?.[stars.toString()] || 0}
               </span>
             </div>
           ))}
         </div>
         
         <div className="text-center">
-          <div className="text-4xl font-bold text-green-600 mb-2">{Number(googleData.rating).toFixed(1)}★</div>
+          <div className="text-4xl font-bold text-green-600 mb-2">{Number(googleData.rating ?? 0).toFixed(1)}★</div>
           <div className="text-gray-600 text-sm">Google Rating</div>
           <div className="text-gray-500 text-xs mb-3">Based on {googleData.total}+ reviews</div>
           <Button
