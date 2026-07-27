@@ -31,7 +31,27 @@ load_dotenv(ROOT_DIR / '.env')
 mongo_url = os.environ['MONGO_URL']
 client = AsyncIOMotorClient(mongo_url)
 db = client[os.environ['DB_NAME']]
+from fastapi import FastAPI
 
+app = FastAPI(
+    title="Memories API",
+    description="Backend API for Memories - Photo Frames & Customized Gift Shop",
+    version="1.0.0"
+)
+
+# Add this here
+@app.get("/")
+def home():
+    return {
+        "status": "running",
+        "message": "Memories API",
+        "docs": "/api/docs"
+    }
+
+# Your existing routes continue below...
+@app.get("/api/")
+def root():
+    return {"message": "Welcome to Memories API"}
 # Create the main app without a prefix
 app = FastAPI(
     title="Memories API",
