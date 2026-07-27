@@ -23,7 +23,6 @@ import base64
 import io
 from PIL import Image
 
-
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
 
@@ -31,39 +30,74 @@ load_dotenv(ROOT_DIR / '.env')
 mongo_url = os.environ['MONGO_URL']
 client = AsyncIOMotorClient(mongo_url)
 db = client[os.environ['DB_NAME']]
-from fastapi import FastAPI
 
+# Create ONE FastAPI app
 app = FastAPI(
-    title="Memories API",
-    description="Backend API for Memories - Photo Frames & Customized Gift Shop",
-    version="1.0.0"
+    title='Memories API',
+    description='Backend API for Memories - Photo Frames & Customized Gift Shop',
+    version='1.0.0',
+    docs_url='/api/docs',
+    redoc_url='/api/redoc',
+    openapi_url='/api/openapi.json',
 )
 
-# Add this here
-@app.get("/")
+# Root endpoint for Render health check
+@app.get('/')
 def home():
     return {
-        "status": "running",
-        "message": "Memories API",
-        "docs": "/api/docs"
+        'status': 'running',
+        'message': 'Memories API',
+        'docs': '/api/docs'
     }
 
-# Your existing routes continue below...
-@app.get("/api/")
+# API root endpoint
+@app.get('/api/')
 def root():
-    return {"message": "Welcome to Memories API"}
-# Create the main app without a prefix
-app = FastAPI(
-    title="Memories API",
-    description="Backend API for Memories - Photo Frames & Customized Gift Shop",
-    version="1.0.0",
-    docs_url="/api/docs",
-    redoc_url="/api/redoc",
-    openapi_url="/api/openapi.json",
-)
+    return {
+        'message': 'Memories - Photo Frames & Customized Gift Shop API Ready! 📸🎁'
+    }
+
+# Optional health endpoint
+@app.get('/health')
+def health():
+    return {
+        'status': 'healthy'
+    }
 
 # Create a router with the /api prefix
-api_router = APIRouter(prefix="/api")
+api_router = APIRouter(prefix='/api')
+
+# ============================ Auth helpers (defined early so routes can use them) ============================
+JWT_SECRET = os.environ['JWT_SECRET']
+JWT_ALG = 'HS256'
+security = HTTPBearer(auto_error=False)
+
+# ============================ Payment (Razorpay) config ============================
+PAYMENT_MODE = os.environ.get('PAYMENT_MODE', 'mock')
+RAZORPAY_KEY_ID = os.environ.get('RAZORPAY_KEY_ID', 'mock')
+RAZORPAY_KEY_SECRET = os.environ.get('RAZORPAY_KEY_SECRET', 'mock')
+
+
+def hash_password(pw: str) -> str:
+    return bcrypt.hashpw(pw.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+
+
+def verify_password(pw: str, hashed: str) -> bool:
+    try:
+        return bcrypt.checkpw(pw.encode('utf-8'), hashed.encode('utf-8'))
+    except Exception:
+        return False
+
+
+def create_token(sub: str, role: str, extra: dict = None) -> str:
+    payload = {
+        'sub': sub,
+        'role': role,
+        'exp': datetime.now(timezone.utc) + timedelta(days=7),
+    }
+    if extra:
+        payload.update(extra)
+    return pyjwt.encode(payload, JWT_SECRET, algorithm=JWT_ALG)
 
 # ============================ Auth helpers (defined early so routes can use them) ============================
 JWT_SECRET = os.environ["JWT_SECRET"]
