@@ -447,6 +447,30 @@ sample_products = [
 async def root():
     return {"message": "Memories - Photo Frames & Customized Gift Shop API Ready! 📸🎁"}
 
+@api_router.get("/version")
+async def version_info():
+    """TEMPORARY deploy-verification endpoint. Remove after verification."""
+    commit = (
+        os.environ.get("RENDER_GIT_COMMIT")
+        or os.environ.get("GIT_COMMIT")
+        or ""
+    )
+    if not commit:
+        try:
+            import subprocess
+            commit = subprocess.check_output(
+                ["git", "rev-parse", "HEAD"], cwd=str(ROOT_DIR), stderr=subprocess.DEVNULL
+            ).decode().strip()
+        except Exception:
+            commit = "unknown"
+    return {
+        "git_commit": commit,
+        "app_version": app.version,
+        "docs_url": app.docs_url,
+        "openapi_url": app.openapi_url,
+        "registered_routes": len(app.routes),
+    }
+
 @api_router.get("/products", response_model=List[Product])
 async def get_products(category: Optional[str] = None):
     query = {}
