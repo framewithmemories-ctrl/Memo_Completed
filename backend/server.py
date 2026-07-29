@@ -42,6 +42,23 @@ app = FastAPI(
     openapi_url="/api/openapi.json",
 )
 
+
+@app.get("/")
+async def app_root():
+    return {
+        "status": "running",
+        "message": "Memories API",
+        "docs": "/api/docs"
+    }
+
+
+@app.get("/health")
+async def health_check():
+    return {
+        "status": "healthy"
+    }
+
+
 # Create a router with the /api prefix
 api_router = APIRouter(prefix="/api")
 

@@ -1,0 +1,28 @@
+{
+  "summary": "Backend regression check after additive change adding app-level GET / and GET /health routes to server.py. Verified all required non-DB /api endpoints and app-level routes on localhost. Backend is up and healthy; no regressions detected from the additive change.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_results": {
+    "GET /api/version": "200 OK - contains git_commit=8bf3c58..., app_version=1.0.0, docs_url=/api/docs, openapi_url=/api/openapi.json, registered_routes=65",
+    "GET /api/docs": "200 OK (Swagger UI reachable via public URL)",
+    "GET /api/openapi.json": "200 OK (OpenAPI schema served)",
+    "GET /api/config": "200 OK - {\"shop_whatsapp\":\"918148040148\",\"business_name\":\"Memories\"}",
+    "GET /api/": "200 OK - {\"message\":\"Memories - Photo Frames & Customized Gift Shop API Ready! ...\"}",
+    "GET / (localhost:8001)": "200 OK - {\"status\":\"running\",\"message\":\"Memories API\",\"docs\":\"/api/docs\"} (confirmed on backend; public URL routes non-/api to frontend as noted by main agent)",
+    "GET /health (localhost:8001)": "200 OK - {\"status\":\"healthy\"}",
+    "Backend process": "supervisorctl reports backend RUNNING, no startup errors"
+  },
+  "test_report_links": [],
+  "action_items": [],
+  "critical_code_review_comments": [],
+  "updated_files": [],
+  "success_rate": {"backend": "100% (5/5 required /api regression endpoints + 2 app-level routes verified)", "frontend": "N/A (skipped per request)"},
+  "test_credentials": "Not needed for these public endpoints",
+  "seed_data_creation": "None",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Additive app-level routes / and /health only reachable via backend localhost:8001 in this preview (K8s ingress routes non-/api to frontend). DB-backed endpoints (/api/products, /api/reviews, /api/orders, /api/chat) currently 500 due to Atlas auth failure in preview — known infra issue, unrelated to this change; do not report as regression."
+}
