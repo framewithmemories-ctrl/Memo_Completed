@@ -214,7 +214,7 @@ export const DigitalWallet = ({ userId, onBalanceUpdate }) => {
                 <span className="font-medium text-gray-700">Wallet Balance</span>
               </div>
               <div className="text-3xl font-bold text-green-600">
-                {showBalance ? `₹${walletData.balance.toFixed(2)}` : '₹•••••'}
+                {showBalance ? `₹${Number(walletData.balance ?? 0).toFixed(2)}` : '₹•••••'}
               </div>
             </div>
             
@@ -228,7 +228,7 @@ export const DigitalWallet = ({ userId, onBalanceUpdate }) => {
                 {showBalance ? walletData.rewardPoints : '•••••'}
               </div>
               <p className="text-xs text-gray-500 mt-1">
-                = ₹{((walletData.rewardPoints / 100) * 10).toFixed(2)} value
+                = ₹{(((walletData.rewardPoints ?? 0) / 100) * 10).toFixed(2)} value
               </p>
             </div>
             
@@ -239,7 +239,7 @@ export const DigitalWallet = ({ userId, onBalanceUpdate }) => {
                 <span className="font-medium text-gray-700">Store Credits</span>
               </div>
               <div className="text-3xl font-bold text-purple-600">
-                {showBalance ? `₹${walletData.storeCredits.toFixed(2)}` : '₹•••••'}
+                {showBalance ? `₹${Number(walletData.storeCredits ?? 0).toFixed(2)}` : '₹•••••'}
               </div>
             </div>
           </div>
@@ -335,7 +335,7 @@ export const DigitalWallet = ({ userId, onBalanceUpdate }) => {
                     <div className="flex justify-between items-center mt-2">
                       <span className="text-sm text-gray-700">Conversion Value:</span>
                       <span className="font-semibold text-green-600">
-                        ₹{((walletData.rewardPoints / 100) * 10).toFixed(2)}
+                        ₹{(((walletData.rewardPoints ?? 0) / 100) * 10).toFixed(2)}
                       </span>
                     </div>
                   </div>

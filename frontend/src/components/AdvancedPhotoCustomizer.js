@@ -561,7 +561,7 @@ export const AdvancedPhotoCustomizer = () => {
                         <div>
                           <Label className="text-sm font-medium flex items-center mb-2">
                             <ZoomIn className="w-4 h-4 mr-1" />
-                            Scale: {photoTransform.scale.toFixed(2)}x
+                            Scale: {Number(photoTransform.scale ?? 1).toFixed(2)}x
                           </Label>
                           <Slider
                             value={[photoTransform.scale]}
