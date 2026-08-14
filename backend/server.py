@@ -321,6 +321,11 @@ class Order(BaseModel):
     delivery_address: Optional[dict] = None
     pickup_slot: Optional[str] = None
     points_earned: int = 0
+    razorpay_order_id: Optional[str] = None
+    razorpay_payment_id: Optional[str] = None
+    store_credit_applied: float = 0.0
+    payment_attempts: int = 0
+    payment_updated_at: Optional[datetime] = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 class OrderCreate(BaseModel):
@@ -959,57 +964,207 @@ class PaymentVerifyRequest(BaseModel):
     razorpay_signature: Optional[str] = None
 
 
+class PaymentCreateRequest(BaseModel):
+    user_id: str
+    items: List[dict]
+    delivery_type: str
+    delivery_address: Optional[dict] = None
+    pickup_slot: Optional[str] = None
+    use_store_credit: bool = False
+
+
+# Razorpay single-transaction ceiling (₹5,00,000). Reject anything above before calling the API.
+RAZORPAY_MAX_AMOUNT = 500000.0
+
+
+async def _compute_order_pricing(items: list, delivery_type: str, use_store_credit: bool, user: Optional[dict]):
+    """Server-authoritative pricing. Returns validated line items + totals.
+    Reuses Sprint 1 validation and the existing business rules (GST 18%, free delivery >= Rs.1000)."""
+    if not items:
+        raise HTTPException(status_code=400, detail="Order must contain at least one item")
+    subtotal = 0.0
+    for item in items:
+        try:
+            qty = int(item.get("quantity", 0))
+            price = float(item.get("price", 0))
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="Invalid item price or quantity")
+        if qty <= 0 or qty > 100:
+            raise HTTPException(status_code=400, detail="Invalid item quantity")
+        if not math.isfinite(price) or price < 0 or price > 1_000_000:
+            raise HTTPException(status_code=400, detail="Invalid item price")
+        product_id = item.get("product_id") or item.get("id")
+        if product_id:
+            product = await db.products.find_one({"id": product_id})
+            if product and price + 0.01 < float(product.get("base_price", 0)):
+                raise HTTPException(status_code=400, detail="Item price is below the catalog price")
+        subtotal += price * qty
+
+    delivery = 0.0 if (delivery_type == "pickup" or subtotal >= 1000) else 50.0
+    tax = round(subtotal * 0.18)
+    # Store credit applied server-side (never trusts a client amount); capped at pre-credit total
+    store_credit_applied = 0.0
+    if use_store_credit and user:
+        available = float(user.get("store_credits", 0.0) or 0.0)
+        store_credit_applied = max(0.0, min(available, subtotal + delivery + tax))
+    final_amount = max(0.0, subtotal + delivery + tax - store_credit_applied)
+    return {
+        "subtotal": subtotal, "delivery": delivery, "tax": tax,
+        "store_credit_applied": round(store_credit_applied, 2),
+        "final_amount": round(final_amount, 2),
+        "points_earned": int(subtotal * 0.03),
+    }
+
+
+async def _create_razorpay_order(amount_rupees: float):
+    """Create a Razorpay order server-side (production). Returns the razorpay order id.
+    Mock mode returns a synthetic id and never calls the network."""
+    if amount_rupees <= 0 or amount_rupees > RAZORPAY_MAX_AMOUNT:
+        raise HTTPException(status_code=400, detail="Payment amount out of allowed range")
+    amount_paise = round(amount_rupees * 100)
+    if PAYMENT_MODE != "production":
+        return f"order_mock_{uuid.uuid4().hex[:14]}"
+    if not RAZORPAY_KEY_ID or not RAZORPAY_KEY_SECRET or RAZORPAY_KEY_SECRET == "mock":
+        raise HTTPException(status_code=500, detail="Payment gateway is not configured")
+    try:
+        async with httpx.AsyncClient(timeout=15) as http:
+            resp = await http.post(
+                "https://api.razorpay.com/v1/orders",
+                auth=(RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET),
+                json={"amount": amount_paise, "currency": "INR", "payment_capture": 1},
+            )
+        if resp.status_code >= 400:
+            logger.error(f"Razorpay order creation failed: HTTP {resp.status_code}")
+            raise HTTPException(status_code=502, detail="Could not create payment order")
+        return resp.json()["id"]
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Razorpay order creation error: {type(e).__name__}")
+        raise HTTPException(status_code=502, detail="Could not create payment order")
+
+
 @api_router.get("/payments/config")
 async def get_payment_config():
-    """Expose non-sensitive payment config for the frontend checkout."""
+    """Expose non-sensitive payment config for the frontend checkout (never the secret)."""
     return {"mode": PAYMENT_MODE, "razorpay_key_id": RAZORPAY_KEY_ID if PAYMENT_MODE == "production" else ""}
+
+
+@api_router.post("/payments/create-order")
+async def create_payment_order(payload: PaymentCreateRequest):
+    """Validate cart, compute the server-authoritative amount, create a pending Memories order
+    and a matching Razorpay order, then return payment info for the frontend checkout."""
+    user = await db.users.find_one({"id": payload.user_id}) if payload.user_id else None
+    pricing = await _compute_order_pricing(payload.items, payload.delivery_type, payload.use_store_credit, user)
+
+    order_obj = Order(
+        user_id=payload.user_id,
+        items=payload.items,
+        total_amount=pricing["final_amount"],
+        delivery_type=payload.delivery_type,
+        delivery_address=payload.delivery_address,
+        pickup_slot=payload.pickup_slot,
+        points_earned=pricing["points_earned"],
+        store_credit_applied=pricing["store_credit_applied"],
+        payment_status="pending",
+        order_status="pending",
+    )
+    rzp_order_id = await _create_razorpay_order(pricing["final_amount"])
+    order_obj.razorpay_order_id = rzp_order_id
+    order_obj.payment_attempts = 1
+    await db.orders.insert_one(order_obj.dict())
+
+    return {
+        "memories_order_id": order_obj.id,
+        "razorpay_order_id": rzp_order_id,
+        "amount": round(pricing["final_amount"] * 100),  # paise
+        "currency": "INR",
+        "key_id": RAZORPAY_KEY_ID if PAYMENT_MODE == "production" else "",
+        "mode": PAYMENT_MODE,
+        "pricing": pricing,
+    }
 
 
 @api_router.post("/payments/verify")
 async def verify_payment(payload: PaymentVerifyRequest):
-    """Verify a Razorpay payment signature and move the order to 'processing'.
-
-    - mock mode: bypass signature verification (for local/testing).
-    - production mode: verify HMAC SHA256 signature over
-      f"{razorpay_order_id}|{razorpay_payment_id}" using RAZORPAY_KEY_SECRET.
-    """
+    """Verify a Razorpay payment using the SERVER-STORED razorpay_order_id, then mark paid.
+    mock mode bypasses signature; production verifies HMAC-SHA256(stored_order|payment_id)."""
     order = await db.orders.find_one({"id": payload.order_id})
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
 
-    # Idempotency: never mark an order paid twice
+    # Idempotency: already paid -> safe success, but reject a DIFFERENT payment_id
     if order.get("payment_status") == "paid":
+        if payload.razorpay_payment_id and order.get("razorpay_payment_id") and \
+           payload.razorpay_payment_id != order.get("razorpay_payment_id"):
+            raise HTTPException(status_code=409, detail="Order already paid with a different payment")
         return {"success": True, "order_id": payload.order_id,
                 "status": order.get("status", "processing"), "mode": PAYMENT_MODE, "already_paid": True}
 
+    stored_rzp_order = order.get("razorpay_order_id")
+
     if PAYMENT_MODE == "production":
-        # Production must have real Razorpay credentials configured
         if not RAZORPAY_KEY_SECRET or RAZORPAY_KEY_SECRET == "mock":
             raise HTTPException(status_code=500, detail="Payment gateway is not configured")
-        if not (payload.razorpay_order_id and payload.razorpay_payment_id and payload.razorpay_signature):
+        if not (payload.razorpay_payment_id and payload.razorpay_signature):
             raise HTTPException(status_code=400, detail="Missing Razorpay payment fields")
+        if not stored_rzp_order:
+            raise HTTPException(status_code=400, detail="No Razorpay order associated with this order")
+        # Never trust a browser-supplied order id: if provided it MUST match the stored one
+        if payload.razorpay_order_id and payload.razorpay_order_id != stored_rzp_order:
+            raise HTTPException(status_code=400, detail="Razorpay order mismatch")
 
-        message = f"{payload.razorpay_order_id}|{payload.razorpay_payment_id}"
+        message = f"{stored_rzp_order}|{payload.razorpay_payment_id}"
         expected_signature = hmac.new(
             bytes(RAZORPAY_KEY_SECRET, "utf-8"),
             bytes(message, "utf-8"),
             hashlib.sha256,
         ).hexdigest()
-
         if not hmac.compare_digest(expected_signature, payload.razorpay_signature):
+            await db.orders.update_one({"id": payload.order_id},
+                                       {"$set": {"payment_status": "failed", "payment_updated_at": datetime.now(timezone.utc)}})
             raise HTTPException(status_code=400, detail="Payment signature verification failed")
 
+    # --- Payment verified: commit state exactly once ---
     await db.orders.update_one(
         {"id": payload.order_id},
         {"$set": {
             "status": "processing",
             "payment_status": "paid",
             "order_status": "confirmed",
-            "razorpay_order_id": payload.razorpay_order_id,
             "razorpay_payment_id": payload.razorpay_payment_id,
-            "updated_at": datetime.now(timezone.utc),
+            "razorpay_signature": payload.razorpay_signature,
+            "payment_updated_at": datetime.now(timezone.utc),
         }},
     )
+
+    # Commit store-credit deduction now (only after successful payment); guard double-commit
+    sc = float(order.get("store_credit_applied", 0.0) or 0.0)
+    if sc > 0 and order.get("user_id"):
+        existing_txn = await db.wallet_transactions.find_one(
+            {"order_id": payload.order_id, "type": "debit"})
+        if not existing_txn:
+            u = await db.users.find_one({"id": order["user_id"]})
+            if u:
+                new_credit = max(0.0, float(u.get("store_credits", 0.0) or 0.0) - sc)
+                await db.users.update_one({"id": order["user_id"]}, {"$set": {"store_credits": new_credit}})
+                await db.wallet_transactions.insert_one(WalletTransaction(
+                    user_id=order["user_id"], type="debit", amount=sc,
+                    description=f"Store credit for order #{payload.order_id[:8]}",
+                    category="purchase", order_id=payload.order_id, balance_after=new_credit,
+                ).dict())
+
+    # Award purchase points once (idempotent via payment_status transition above)
+    pts = int(order.get("points_earned", 0) or 0)
+    if pts > 0 and order.get("user_id"):
+        u = await db.users.find_one({"id": order["user_id"]})
+        if u:
+            new_points = int(u.get("points", 0) or 0) + pts
+            new_tier = "Platinum" if new_points >= 5000 else "Gold" if new_points >= 2000 else "Silver"
+            await db.users.update_one({"id": order["user_id"]}, {"$set": {"points": new_points, "tier": new_tier}})
+
+    # TODO(webhook-sprint): a future Razorpay webhook should reconcile captured/failed/refund
+    # events against these fields (payment_status, razorpay_payment_id) for out-of-band updates.
     return {"success": True, "order_id": payload.order_id, "status": "processing", "mode": PAYMENT_MODE}
 
 
