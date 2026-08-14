@@ -9,6 +9,7 @@ from pathlib import Path
 from pydantic import BaseModel, Field
 from typing import List, Optional
 import uuid
+import re
 from datetime import datetime, timezone, timedelta
 import jwt as pyjwt
 import bcrypt
@@ -196,16 +197,86 @@ class ReviewCreate(BaseModel):
     photos: Optional[List[str]] = []
     product_id: Optional[str] = None
 
+class ProductVariant(BaseModel):
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    name: str                      # e.g. "8x10 / Wood"
+    price_delta: float = 0.0       # added to base_price
+    sku: Optional[str] = None
+    in_stock: bool = True
+
+
+class ProductCustomization(BaseModel):
+    enabled: bool = False
+    photo_upload: bool = False
+    min_photos: int = 0
+    max_photos: int = 1
+    name: bool = False
+    date: bool = False
+    message: bool = False
+    quote: bool = False
+    logo_upload: bool = False
+    preview: bool = False
+
+
+class ProductMedia(BaseModel):
+    primary_image: Optional[str] = None
+    gallery: List[str] = []
+    video_url: Optional[str] = None
+
+
+class ProductFulfilment(BaseModel):
+    production_days: int = 3
+    pickup_available: bool = True
+    delivery_available: bool = True
+
+
+class ProductMarketing(BaseModel):
+    featured: bool = False
+    bestseller: bool = False
+    new_arrival: bool = False
+    trending: bool = False
+
+
+class ProductSEO(BaseModel):
+    title: Optional[str] = None
+    meta_description: Optional[str] = None
+
+
+class ProductStatus(BaseModel):
+    active: bool = True
+    published: bool = True
+
+
 class Product(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    # identity
     name: str
     description: str
+    sku: Optional[str] = None
+    slug: Optional[str] = None
+    short_description: Optional[str] = ""
+    # classification
     category: str
+    subcategory: Optional[str] = None
+    tags: List[str] = []
+    occasions: List[str] = []
+    recipients: List[str] = []
+    # pricing
     base_price: float
-    sizes: List[dict]
-    materials: List[dict]
-    colors: List[dict]
+    compare_at_price: Optional[float] = None
+    variants: List[ProductVariant] = []
+    # legacy option arrays (kept for backward compatibility)
+    sizes: List[dict] = []
+    materials: List[dict] = []
+    colors: List[dict] = []
     image_url: str
+    # grouped V2 fields (all defaulted -> old docs load fine)
+    customization: ProductCustomization = Field(default_factory=ProductCustomization)
+    media: ProductMedia = Field(default_factory=ProductMedia)
+    fulfilment: ProductFulfilment = Field(default_factory=ProductFulfilment)
+    marketing: ProductMarketing = Field(default_factory=ProductMarketing)
+    seo: ProductSEO = Field(default_factory=ProductSEO)
+    status: ProductStatus = Field(default_factory=ProductStatus)
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 class ProductCreate(BaseModel):
@@ -213,10 +284,26 @@ class ProductCreate(BaseModel):
     description: str
     category: str
     base_price: float
-    sizes: List[dict]
-    materials: List[dict]
-    colors: List[dict]
     image_url: str
+    # optional V2 fields (all backward-compatible)
+    sku: Optional[str] = None
+    slug: Optional[str] = None
+    short_description: Optional[str] = ""
+    subcategory: Optional[str] = None
+    tags: List[str] = []
+    occasions: List[str] = []
+    recipients: List[str] = []
+    compare_at_price: Optional[float] = None
+    variants: List[ProductVariant] = []
+    sizes: List[dict] = []
+    materials: List[dict] = []
+    colors: List[dict] = []
+    customization: Optional[ProductCustomization] = None
+    media: Optional[ProductMedia] = None
+    fulfilment: Optional[ProductFulfilment] = None
+    marketing: Optional[ProductMarketing] = None
+    seo: Optional[ProductSEO] = None
+    status: Optional[ProductStatus] = None
 
 class CustomDesign(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
@@ -499,6 +586,23 @@ async def version_info():
         "registered_routes": len(app.routes),
     }
 
+def _slugify(text: str) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "-", (text or "").lower()).strip("-")
+    return slug or uuid.uuid4().hex[:8]
+
+
+def _normalize_product(doc: dict) -> Product:
+    """Fill V2 defaults for legacy product docs so old products keep working.
+    Backfills slug and media.primary_image from legacy fields without requiring a migration."""
+    if not doc.get("slug"):
+        doc["slug"] = _slugify(doc.get("name", ""))
+    media = doc.get("media") or {}
+    if not media.get("primary_image"):
+        media["primary_image"] = doc.get("image_url")
+    doc["media"] = media
+    return Product(**doc)
+
+
 @api_router.get("/products", response_model=List[Product])
 async def get_products(category: Optional[str] = None):
     query = {}
@@ -513,20 +617,26 @@ async def get_products(category: Optional[str] = None):
             await db.products.insert_one(product.dict())
         products = await db.products.find(query).to_list(100)
     
-    return [Product(**product) for product in products]
+    return [_normalize_product(product) for product in products]
 
 @api_router.post("/products", response_model=Product)
 async def create_product(product: ProductCreate, admin=Depends(require_admin)):
-    product_obj = Product(**product.dict())
+    data = {k: v for k, v in product.dict().items() if v is not None}
+    if not data.get("slug"):
+        data["slug"] = _slugify(data.get("name", ""))
+    product_obj = Product(**data)
+    if not product_obj.media.primary_image:
+        product_obj.media.primary_image = product_obj.image_url
     await db.products.insert_one(product_obj.dict())
     return product_obj
 
 @api_router.get("/products/{product_id}", response_model=Product)
 async def get_product(product_id: str):
-    product = await db.products.find_one({"id": product_id})
+    # Look up by id first, then by slug (supports future product detail pages)
+    product = await db.products.find_one({"id": product_id}) or await db.products.find_one({"slug": product_id})
     if not product:
         raise HTTPException(status_code=404, detail="Product not found")
-    return Product(**product)
+    return _normalize_product(product)
 
 @api_router.post("/users", response_model=User)
 async def create_user(user: UserCreate, admin=Depends(require_admin)):
@@ -918,12 +1028,20 @@ async def create_order(order: OrderCreate):
             raise HTTPException(status_code=400, detail="Invalid item quantity")
         if not math.isfinite(price) or price < 0 or price > 1_000_000:
             raise HTTPException(status_code=400, detail="Invalid item price")
-        # Source-of-truth: submitted price cannot be below the catalog base price
+        # Source-of-truth: submitted price cannot be below the catalog base price (+ variant)
         product_id = item.get("product_id") or item.get("id")
         if product_id:
             product = await db.products.find_one({"id": product_id})
-            if product and price + 0.01 < float(product.get("base_price", 0)):
-                raise HTTPException(status_code=400, detail="Item price is below the catalog price")
+            if product:
+                expected_min = float(product.get("base_price", 0))
+                variant_id = item.get("variant_id")
+                if variant_id:
+                    variant = next((v for v in product.get("variants", []) if v.get("id") == variant_id), None)
+                    if not variant:
+                        raise HTTPException(status_code=400, detail="Invalid product variant")
+                    expected_min += float(variant.get("price_delta", 0))
+                if price + 0.01 < expected_min:
+                    raise HTTPException(status_code=400, detail="Item price is below the catalog price")
         computed_subtotal += price * qty
 
     total = order.total_amount
@@ -996,8 +1114,16 @@ async def _compute_order_pricing(items: list, delivery_type: str, use_store_cred
         product_id = item.get("product_id") or item.get("id")
         if product_id:
             product = await db.products.find_one({"id": product_id})
-            if product and price + 0.01 < float(product.get("base_price", 0)):
-                raise HTTPException(status_code=400, detail="Item price is below the catalog price")
+            if product:
+                expected_min = float(product.get("base_price", 0))
+                variant_id = item.get("variant_id")
+                if variant_id:
+                    variant = next((v for v in product.get("variants", []) if v.get("id") == variant_id), None)
+                    if not variant:
+                        raise HTTPException(status_code=400, detail="Invalid product variant")
+                    expected_min += float(variant.get("price_delta", 0))
+                if price + 0.01 < expected_min:
+                    raise HTTPException(status_code=400, detail="Item price is below the catalog price")
         subtotal += price * qty
 
     delivery = 0.0 if (delivery_type == "pickup" or subtotal >= 1000) else 50.0
@@ -2139,7 +2265,12 @@ async def get_ai_usage(admin=Depends(require_admin)):
 @api_router.post("/admin/products", response_model=Product)
 async def create_product_admin(product: ProductCreate, admin=Depends(require_admin)):
     """Create a new product (admin only)."""
-    product_obj = Product(**product.dict())
+    data = {k: v for k, v in product.dict().items() if v is not None}
+    if not data.get("slug"):
+        data["slug"] = _slugify(data.get("name", ""))
+    product_obj = Product(**data)
+    if not product_obj.media.primary_image:
+        product_obj.media.primary_image = product_obj.image_url
     await db.products.insert_one(product_obj.dict())
     return product_obj
 
@@ -2176,6 +2307,9 @@ async def update_product_admin(product_id: str, product_update: dict, admin=Depe
     """Update product (admin only)"""
     try:
         product_update.pop("id", None)
+        # Keep slug in sync when the name changes and no explicit slug provided
+        if product_update.get("name") and not product_update.get("slug"):
+            product_update["slug"] = _slugify(product_update["name"])
         result = await db.products.update_one(
             {"id": product_id},
             {"$set": product_update}
@@ -2271,6 +2405,7 @@ async def startup_create_indexes():
             (db.users, "id"),
             (db.products, "id"),
             (db.products, "category"),
+            (db.products, "slug"),
             (db.orders, "id"),
             (db.orders, "user_id"),
             (db.orders, "created_at"),
