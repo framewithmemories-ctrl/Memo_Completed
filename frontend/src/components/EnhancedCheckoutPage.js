@@ -220,11 +220,13 @@ export const EnhancedCheckoutPage = ({ onClose }) => {
 
       const items = cartItems.map((it) => ({
         product_id: it.productId || it.id,
+        variant_id: it.variantId || null,
         name: it.name,
         price: it.price,
         quantity: it.quantity,
         image: it.image,
         category: it.category,
+        customOptions: it.customOptions || {},
       }));
       const deliveryAddress = {
         name: formData.name,

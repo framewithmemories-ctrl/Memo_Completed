@@ -1,0 +1,35 @@
+{
+  "summary": "Frontend-only testing of Sprint 4 Product Detail Page (PDP) at /product/:slug on desktop (1920) and mobile (390). PDP core flows all functional: product loads with correct name/price/compare price, gallery thumb switches main image, variant selector updates price and Add to Cart label (A3=₹1199, A4=₹899), config-driven customization renders only enabled fields (photo/name/date/message; quote & logo correctly hidden), invalid-slug shows pdp-not-found with working Back to Shop, product-card-image click on homepage navigates to /product/{slug}, homepage regression (hero, AI Gift Finder, Memo chat widget) OK, mobile 390px shows no horizontal overflow. Cart integration verified via localStorage (memoriesCart) — item added with correct price, variantId, image, photos and customization fields.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "ProductDetailPage", "issue": "No <Toaster/> mounted on /product/:slug route. Toast messages (validation errors like 'Please upload at least 1 photo', 'Added to cart!' success, upload errors) are triggered by code but NEVER visually appear to the user because Sonner Toaster is only rendered inside the Home component, not at App root. User gets no feedback when Add to Cart is clicked without required fields or when it succeeds.", "selector": "[data-sonner-toaster] (missing)", "priority": "HIGH"},
+      {"component": "ProductDetailPage", "issue": "PDP renders without site Header/Footer/WhatsApp float/ChatWidget. Only a 'Back to Shop' link. User can't access cart icon, navigation menu, search, or account from PDP — inconsistent UX vs. rest of site.", "selector": "header, footer", "priority": "MEDIUM"}
+    ],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "PDP mobile (390px)", "issues": ["Layout stacks correctly, no horizontal overflow (scrollWidth - clientWidth = 0)."]}
+    ]
+  },
+  "test_report_links": [],
+  "action_items": [
+    "Move <Toaster /> from Home component to App root (inside App.js, outside <Routes>) so toast notifications work on every route including /product/:slug. Currently validation errors and success confirmations are silent on PDP.",
+    "Render the shared Header (with cart icon) and Footer on ProductDetailPage for consistent site chrome and to allow the user to open the cart / navigate after adding to cart. Optionally include <ChatWidget /> and <WhatsAppFloat /> too.",
+    "Consider surfacing a visible inline error message (not only toast) below Add to Cart button when required customization fields are missing, so validation feedback is discoverable even if toast is fixed."
+  ],
+  "critical_code_review_comments": [
+    "App.js: <Toaster /> is only inside Home. On any non-'/' route (PDP, /about, /admin) sonner toasts are triggered but never rendered — silent UX failures. Should be a top-level component alongside <BrowserRouter>.",
+    "ProductDetailPage.js is self-contained but lacks the global Header/Footer/ChatWidget wrapping — no shell/layout component being reused across routes.",
+    "handleAddToCart shows success toast then calls navigate('/') via toast action — but toast itself never displays on PDP, so users may not realise the action succeeded (only the button briefly disables). Combine with the Toaster fix.",
+    "In fetchProduct, related-products request `GET /api/products` returns the whole catalog; filter client-side is fine now but could be moved server-side.",
+    "cfg = product?.customization || {} then cfg.enabled — good defensive access. Photo count validation uses cfg.min_photos which is correct."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "N/A (skipped)", "frontend": "90% (all functional flows pass; toast visibility is the sole significant issue)"},
+  "test_credentials": "N/A (public PDP, no auth)",
+  "seed_data_creation": "Used pre-seeded product slug: sprint4-demo-acrylic-frame (already seeded by main agent).",
+  "retest_needed": true,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "PDP at /product/sprint4-demo-acrylic-frame works. Photo upload requires a reasonably-sized image (backend rejects 1x1 pixel PNGs with 400); used a 400x400 JPG at /tmp/test_photo.jpg during testing. Cart is stored in localStorage under key 'memoriesCart'. Chat widget testid is 'chat-widget-button' (not just 'chat'). Toaster is currently only in Home component — fixing that is the main follow-up. After fix, retest that (a) empty-form Add to Cart shows a visible error toast, (b) valid submit shows 'Added to cart!' toast on PDP, (c) toasts continue to work on Home.",
+  "rca of the issue": "Sonner's <Toaster /> is a portal that only mounts when the component is rendered. It's placed inside <Home/> in App.js (line 1100) rather than at the App root. When React Router navigates to /product/:slug, Home unmounts and so does Toaster. All toast.success/toast.error calls in ProductDetailPage still fire, but since no Toaster portal exists in the DOM, nothing is shown to the user. Fix: hoist <Toaster /> to sit alongside <BrowserRouter> (or inside the App div) so it's always mounted."
+}

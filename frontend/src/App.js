@@ -21,6 +21,7 @@ import { AccountButton } from "./components/AccountButton";
 import { EnhancedAIGiftFinder } from "./components/EnhancedAIGiftFinder";
 import { HeroSection, AboutUsSection, ProductGrid } from "./components/MainComponents";
 import { AboutUsPage } from "./components/AboutUsPage";
+import { ProductDetailPage } from "./components/ProductDetailPage";
 import { EnhancedCheckoutPage } from "./components/EnhancedCheckoutPage";
 import { ReviewSystemEnhanced } from "./components/ReviewSystemEnhanced";
 import AdminPanel from "./components/AdminPanel";
@@ -1096,7 +1097,6 @@ const Home = () => {
       <Footer />
       <WhatsAppFloat />
       <ChatWidget />
-      <Toaster />
     </div>
   );
 };
@@ -1107,10 +1107,12 @@ function App() {
       <AuthProvider>
         <CartProvider>
           <div className="App">
+            <Toaster />
             <BrowserRouter>
               <Routes>
                 <Route path="/" element={<Home />} />
                 <Route path="/about" element={<AboutUsPage />} />
+                <Route path="/product/:slug" element={<ProductDetailPage />} />
                 <Route path="/admin" element={<AdminPanel />} />
               </Routes>
             </BrowserRouter>

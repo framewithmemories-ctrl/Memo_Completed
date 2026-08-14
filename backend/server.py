@@ -1316,6 +1316,7 @@ async def get_reviews(
     limit: int = 10,
     offset: int = 0,
     rating_filter: Optional[int] = None,
+    product_id: Optional[str] = None,
     approved_only: bool = True
 ):
     """Get reviews with pagination and filtering"""
@@ -1326,6 +1327,8 @@ async def get_reviews(
             filter_query["approved"] = True
         if rating_filter:
             filter_query["rating"] = rating_filter
+        if product_id:
+            filter_query["product_id"] = product_id
         
         # Get total count
         total_count = await db.reviews.count_documents(filter_query)
