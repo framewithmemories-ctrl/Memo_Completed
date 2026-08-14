@@ -18,6 +18,7 @@ import secrets
 import string
 import hashlib
 import hmac
+import math
 from gemini_helper import gemini_generate, gemini_available
 import base64
 import io
@@ -311,6 +312,11 @@ class Order(BaseModel):
     items: List[dict]
     total_amount: float
     status: str = "pending"
+    # V2 status architecture (backward-compatible defaults for old orders)
+    payment_status: str = "pending"      # pending | paid | failed | refunded
+    order_status: str = "pending"        # pending | confirmed | processing | completed | cancelled | refunded
+    production_status: str = "not_started"  # not_started | design_pending | production | ready
+    shipping_status: str = "not_required"   # not_required | pending | shipped | delivered
     delivery_type: str  # "pickup" or "delivery"
     delivery_address: Optional[dict] = None
     pickup_slot: Optional[str] = None
@@ -529,7 +535,7 @@ async def create_user(user: UserCreate, admin=Depends(require_admin)):
     return user_obj
 
 @api_router.get("/users/{user_id}", response_model=User)
-async def get_user(user_id: str):
+async def get_user(user_id: str, owner=Depends(verify_user_access)):
     user = await db.users.find_one({"id": user_id})
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
@@ -542,44 +548,58 @@ async def create_design(design: CustomDesignCreate):
     return design_obj
 
 @api_router.get("/designs/{user_id}")
-async def get_user_designs(user_id: str):
+async def get_user_designs(user_id: str, owner=Depends(verify_user_access)):
     designs = await db.designs.find({"user_id": user_id}).to_list(50)
     return [CustomDesign(**design) for design in designs]
 
 @api_router.post("/upload-image")
 async def upload_image(file: UploadFile = File(...)):
-    if not file.content_type.startswith('image/'):
+    if not file.content_type or not file.content_type.startswith('image/'):
         raise HTTPException(status_code=400, detail="File must be an image (JPG, PNG, HEIC)")
-    
-    # Read and process image
+
+    # Read and enforce a maximum upload size (15 MB) to protect the server
+    MAX_UPLOAD_BYTES = 15 * 1024 * 1024
     contents = await file.read()
-    
-    # Convert to base64 for storage/preview
-    image_base64 = base64.b64encode(contents).decode('utf-8')
-    
-    # Basic image validation with enhanced feedback
+    if not contents:
+        raise HTTPException(status_code=400, detail="Empty file uploaded")
+    if len(contents) > MAX_UPLOAD_BYTES:
+        raise HTTPException(status_code=413, detail="Image too large (max 15 MB)")
+
+    # Verify the bytes are a real, supported image (guards against decompression bombs
+    # and non-image files disguised with an image content-type)
+    ALLOWED_FORMATS = {"JPEG", "PNG", "HEIF", "HEIC", "MPO"}
     try:
-        image = Image.open(io.BytesIO(contents))
+        Image.MAX_IMAGE_PIXELS = 40_000_000  # ~40MP cap (decompression-bomb guard)
+        verify_img = Image.open(io.BytesIO(contents))
+        verify_img.verify()  # structural check
+        image = Image.open(io.BytesIO(contents))  # reopen (verify() consumes the file)
+        if image.format not in ALLOWED_FORMATS:
+            raise HTTPException(status_code=400, detail="Unsupported image format. Use JPG, PNG or HEIC.")
         width, height = image.size
-        
-        # Quality warning with specific recommendations
-        quality_warning = width < 1500 or height < 1500
-        
-        if quality_warning:
-            message = f"⚠️ Image resolution is {width}x{height}px. For best print quality, we recommend minimum 2000x2000px. Current image is suitable for smaller sizes (8x10 or 12x16)."
-        else:
-            message = f"✅ Excellent quality image ({width}x{height}px) - Perfect for all frame sizes!"
-        
-        return {
-            "success": True,
-            "image_data": image_base64,
-            "dimensions": {"width": width, "height": height},
-            "quality_warning": quality_warning,
-            "message": message,
-            "recommended_sizes": ["8x10", "12x16"] if quality_warning else ["8x10", "12x16", "16x20", "20x24"]
-        }
+    except HTTPException:
+        raise
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid image file. Please upload JPG, PNG, or HEIC format.")
+
+    # Convert to base64 for storage/preview
+    image_base64 = base64.b64encode(contents).decode('utf-8')
+
+    # Quality warning with specific recommendations
+    quality_warning = width < 1500 or height < 1500
+
+    if quality_warning:
+        message = f"⚠️ Image resolution is {width}x{height}px. For best print quality, we recommend minimum 2000x2000px. Current image is suitable for smaller sizes (8x10 or 12x16)."
+    else:
+        message = f"✅ Excellent quality image ({width}x{height}px) - Perfect for all frame sizes!"
+
+    return {
+        "success": True,
+        "image_data": image_base64,
+        "dimensions": {"width": width, "height": height},
+        "quality_warning": quality_warning,
+        "message": message,
+        "recommended_sizes": ["8x10", "12x16"] if quality_warning else ["8x10", "12x16", "16x20", "20x24"]
+    }
 
 @api_router.post("/gift-suggestions")
 async def get_gift_suggestions(request: EnhancedGiftRequest):
@@ -878,9 +898,39 @@ async def get_chat_history(session_id: str):
 
 @api_router.post("/orders", response_model=Order)
 async def create_order(order: OrderCreate):
-    # Calculate points earned (3% of order value for Memories customers)
-    points_earned = int(order.total_amount * 0.03)
-    
+    # --- Financial integrity: never blindly trust client totals ---
+    if not order.items:
+        raise HTTPException(status_code=400, detail="Order must contain at least one item")
+
+    computed_subtotal = 0.0
+    for item in order.items:
+        try:
+            qty = int(item.get("quantity", 0))
+            price = float(item.get("price", 0))
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="Invalid item price or quantity")
+        if qty <= 0 or qty > 100:
+            raise HTTPException(status_code=400, detail="Invalid item quantity")
+        if not math.isfinite(price) or price < 0 or price > 1_000_000:
+            raise HTTPException(status_code=400, detail="Invalid item price")
+        # Source-of-truth: submitted price cannot be below the catalog base price
+        product_id = item.get("product_id") or item.get("id")
+        if product_id:
+            product = await db.products.find_one({"id": product_id})
+            if product and price + 0.01 < float(product.get("base_price", 0)):
+                raise HTTPException(status_code=400, detail="Item price is below the catalog price")
+        computed_subtotal += price * qty
+
+    total = order.total_amount
+    if total is None or not math.isfinite(total) or total <= 0 or total > 5_000_000:
+        raise HTTPException(status_code=400, detail="Invalid order total")
+    # Reject grossly manipulated totals (client legitimately adds tax/delivery or subtracts discounts)
+    if total < computed_subtotal * 0.4:
+        raise HTTPException(status_code=400, detail="Order total does not match items")
+
+    # Points earned from validated subtotal (server-side), not client total
+    points_earned = int(computed_subtotal * 0.03)
+
     order_dict = order.dict()
     order_dict["points_earned"] = points_earned
     order_obj = Order(**order_dict)
@@ -927,7 +977,15 @@ async def verify_payment(payload: PaymentVerifyRequest):
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
 
+    # Idempotency: never mark an order paid twice
+    if order.get("payment_status") == "paid":
+        return {"success": True, "order_id": payload.order_id,
+                "status": order.get("status", "processing"), "mode": PAYMENT_MODE, "already_paid": True}
+
     if PAYMENT_MODE == "production":
+        # Production must have real Razorpay credentials configured
+        if not RAZORPAY_KEY_SECRET or RAZORPAY_KEY_SECRET == "mock":
+            raise HTTPException(status_code=500, detail="Payment gateway is not configured")
         if not (payload.razorpay_order_id and payload.razorpay_payment_id and payload.razorpay_signature):
             raise HTTPException(status_code=400, detail="Missing Razorpay payment fields")
 
@@ -946,6 +1004,7 @@ async def verify_payment(payload: PaymentVerifyRequest):
         {"$set": {
             "status": "processing",
             "payment_status": "paid",
+            "order_status": "confirmed",
             "razorpay_order_id": payload.razorpay_order_id,
             "razorpay_payment_id": payload.razorpay_payment_id,
             "updated_at": datetime.now(timezone.utc),
@@ -955,20 +1014,17 @@ async def verify_payment(payload: PaymentVerifyRequest):
 
 
 @api_router.get("/orders/{user_id}")
-async def get_user_orders(user_id: str):
+async def get_user_orders(user_id: str, owner=Depends(verify_user_access)):
     orders = await db.orders.find({"user_id": user_id}).to_list(50)
     return [Order(**order) for order in orders]
 
 # Review Management Endpoints
 @api_router.post("/reviews", response_model=Review)
 async def create_review(review: ReviewCreate):
-    """Create a new customer review"""
+    """Create a new customer review (starts unapproved; admin moderates before it goes public)"""
     try:
         review_obj = Review(**review.dict())
-        
-        # For now, auto-approve all reviews (can add moderation later)
-        review_obj.approved = True
-        
+        # Reviews require admin approval before appearing publicly (approved defaults to False)
         await db.reviews.insert_one(review_obj.dict())
         return review_obj
     except Exception:
@@ -1291,30 +1347,14 @@ async def get_user_wallet(user_id: str, owner=Depends(verify_user_access)):
 
 @api_router.post("/users/{user_id}/wallet/add-money")
 async def add_money_to_wallet(user_id: str, amount: float, owner=Depends(verify_user_access)):
-    user = await db.users.find_one({"id": user_id})
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
-    
-    new_balance = user.get("wallet_balance", 0.0) + amount
-    
-    # Update user wallet
-    await db.users.update_one(
-        {"id": user_id},
-        {"$set": {"wallet_balance": new_balance}}
+    # SECURITY: direct wallet top-up is disabled — a user must never be able to increase
+    # their own balance without a verified payment. Reward-point conversion (store credit)
+    # remains available via /wallet/convert-points.
+    # TODO(payment-sprint): re-enable top-up only after a verified Razorpay payment.
+    raise HTTPException(
+        status_code=403,
+        detail="Wallet top-up requires a verified payment and is currently disabled. Convert reward points to store credit instead.",
     )
-    
-    # Record transaction
-    transaction = WalletTransaction(
-        user_id=user_id,
-        type="credit",
-        amount=amount,
-        description="Money added to wallet",
-        category="topup",
-        balance_after=new_balance
-    )
-    await db.wallet_transactions.insert_one(transaction.dict())
-    
-    return {"new_balance": new_balance, "transaction_id": transaction.id}
 
 @api_router.post("/users/{user_id}/wallet/convert-points")
 async def convert_points_to_credits(user_id: str, points: int, owner=Depends(verify_user_access)):
@@ -1323,6 +1363,8 @@ async def convert_points_to_credits(user_id: str, points: int, owner=Depends(ver
         raise HTTPException(status_code=404, detail="User not found")
     
     current_points = user.get("points", 0)
+    if points <= 0:
+        raise HTTPException(status_code=400, detail="Points must be a positive number")
     if points > current_points:
         raise HTTPException(status_code=400, detail="Insufficient points")
     
@@ -1371,6 +1413,16 @@ async def get_wallet_transactions(user_id: str, limit: int = 50, owner=Depends(v
 
 @api_router.post("/users/{user_id}/wallet/pay")
 async def pay_with_wallet(user_id: str, amount: float, order_id: str, owner=Depends(verify_user_access)):
+    if not math.isfinite(amount) or amount <= 0 or amount > 1_000_000:
+        raise HTTPException(status_code=400, detail="Invalid payment amount")
+
+    # Idempotency: prevent double-deduction for the same order
+    existing = await db.wallet_transactions.find_one(
+        {"user_id": user_id, "order_id": order_id, "type": "debit"}
+    )
+    if existing:
+        raise HTTPException(status_code=409, detail="Wallet payment already recorded for this order")
+
     user = await db.users.find_one({"id": user_id})
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
@@ -2063,10 +2115,17 @@ async def startup_create_indexes():
         for coll, field in [
             (db.users, "id"),
             (db.products, "id"),
+            (db.products, "category"),
+            (db.orders, "id"),
             (db.orders, "user_id"),
+            (db.orders, "created_at"),
+            (db.orders, "payment_status"),
+            (db.orders, "order_status"),
             (db.wallet_transactions, "user_id"),
             (db.user_photos, "user_id"),
+            (db.designs, "user_id"),
             (db.reviews, "approved"),
+            (db.reviews, "product_id"),
             (db.ai_usage_log, "date"),
             (db.admin_audit_log, "created_at"),
         ]:
