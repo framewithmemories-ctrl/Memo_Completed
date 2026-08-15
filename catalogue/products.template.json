@@ -1,0 +1,59 @@
+[
+  {
+    "name": "Example Personalized Photo Frame",
+    "description": "Replace this with a Memories-owned product description.",
+    "sku": "MEM-EXAMPLE-001",
+    "short_description": "A personalized photo gift made for your favourite memories.",
+    "category": "Photo Frames",
+    "subcategory": "Couple Frames",
+    "tags": ["personalized", "photo", "romantic"],
+    "occasions": ["Anniversary", "Birthday"],
+    "recipients": ["Wife", "Husband", "Couple"],
+    "base_price": 999,
+    "compare_at_price": null,
+    "variants": [
+      {"name":"Standard","price_delta":0,"sku":"MEM-EXAMPLE-001-STD","in_stock":true},
+      {"name":"Premium","price_delta":300,"sku":"MEM-EXAMPLE-001-PRE","in_stock":true}
+    ],
+    "sizes": [],
+    "materials": [],
+    "colors": [],
+    "image_url": "https://replace-with-memories-owned-image.example/product.jpg",
+    "customization": {
+      "enabled": true,
+      "photo_upload": true,
+      "min_photos": 1,
+      "max_photos": 3,
+      "name": true,
+      "date": true,
+      "message": true,
+      "quote": false,
+      "logo_upload": false,
+      "preview": false
+    },
+    "media": {
+      "primary_image": "https://replace-with-memories-owned-image.example/product.jpg",
+      "gallery": [],
+      "video_url": null
+    },
+    "fulfilment": {
+      "production_days": 3,
+      "pickup_available": true,
+      "delivery_available": true
+    },
+    "marketing": {
+      "featured": false,
+      "bestseller": false,
+      "new_arrival": true,
+      "trending": false
+    },
+    "seo": {
+      "title": "Personalized Photo Frame | Memories",
+      "meta_description": "Create a personalized photo frame with Memories."
+    },
+    "status": {
+      "active": true,
+      "published": false
+    }
+  }
+]

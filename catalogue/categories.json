@@ -1,0 +1,10 @@
+{
+  "categories": [
+    {"id":"photo-frames","name":"Photo Frames","subcategories":["Wooden Frames","Acrylic Frames","LED Frames","Collage Frames","Couple Frames","Family Frames","Baby Frames","Anniversary Frames","Birthday Frames","Instagram Frames","Calendar Frames","Quote Frames","Table Frames","Wall Frames"]},
+    {"id":"personalized-gifts","name":"Personalized Gifts","subcategories":["Mugs","Cushions","Keychains","Lamps","Clocks","Bottles","Plaques","Magnets","Mobile Stands"]},
+    {"id":"mugs","name":"Mugs","subcategories":["Photo Mugs","Magic Mugs","Premium Mugs"]},
+    {"id":"apparel","name":"Apparel","subcategories":["T-Shirts","Couple T-Shirts","Kids T-Shirts"]},
+    {"id":"combos","name":"Gift Combos","subcategories":["Birthday Combos","Anniversary Combos","Couple Combos","Friendship Combos","Baby Combos","Premium Combos"]},
+    {"id":"corporate","name":"Corporate Gifts","subcategories":["Corporate Frames","Corporate Mugs","Employee Gifts","Event Gifts","Bulk Gifts","Logo Gifts"]}
+  ]
+}
