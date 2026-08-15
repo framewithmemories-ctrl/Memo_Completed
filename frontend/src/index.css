@@ -16,6 +16,11 @@ code {
         monospace;
 }
 
+/* Customer modals must sit above the sticky header, WhatsApp button and hero content. */
+.fixed.inset-0 {
+  z-index: 100 !important;
+}
+
 /* Checkout/cart modal: keep the complete cart reachable on short screens. */
 @media (max-height: 850px) {
   .fixed.inset-0 > .bg-white.rounded-lg {
@@ -30,7 +35,7 @@ code {
   }
 }
 
-/* Remove the builder attribution from the customer-facing storefront. */
+/* Remove any legacy builder attribution if it is present in an older cached build. */
 #emergent-badge {
   display: none !important;
 }
@@ -68,7 +73,7 @@ code {
         --foreground: 0 0% 98%;
         --card: 0 0% 3.9%;
         --card-foreground: 0 0% 98%;
-        --popover: 0 0% 3.9%;
+        --popover: 0 0% 14.9%;
         --popover-foreground: 0 0% 98%;
         --primary: 0 0% 98%;
         --primary-foreground: 0 0% 9%;
