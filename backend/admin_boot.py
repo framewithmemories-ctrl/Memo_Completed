@@ -8,6 +8,7 @@ from server import app, db, hash_password
 
 # Register admin-only catalogue audit/media routes on the same FastAPI app.
 import catalogue_audit  # noqa: F401,E402
+import important_events  # noqa: F401,E402
 
 
 def _current_recovery_secret() -> str:
