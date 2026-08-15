@@ -21,6 +21,7 @@ import { AccountButton } from "./components/AccountButton";
 import { EnhancedAIGiftFinder } from "./components/EnhancedAIGiftFinder";
 import { HeroSection, AboutUsSection, ProductGrid } from "./components/MainComponents";
 import { AboutUsPage } from "./components/AboutUsPage";
+import { ProductDetailPage } from "./components/ProductDetailPage";
 import { EnhancedCheckoutPage } from "./components/EnhancedCheckoutPage";
 import { ReviewSystemEnhanced } from "./components/ReviewSystemEnhanced";
 import AdminPanel from "./components/AdminPanel";
@@ -80,9 +81,9 @@ const SEOHead = () => (
     <meta property="og:title" content="Memories - Photo Frames & Customized Gift Shop Coimbatore" />
     <meta property="og:description" content="Frame with Love and Crafted with Care - Premium photo frames and personalized gifts. Sublimation printing specialist in Coimbatore." />
     <meta property="og:image" content="https://customer-assets.emergentagent.com/job_frameify-store/artifacts/t3qf6xi2_NAME.png" />
-    <meta property="og:url" content="https://photo-frames-dash.preview.emergentagent.com" />
+    <meta property="og:url" content="https://memoriesngifts.com" />
     <meta name="twitter:card" content="summary_large_image" />
-    <link rel="canonical" href="https://photo-frames-dash.preview.emergentagent.com" />
+    <link rel="canonical" href="https://memoriesngifts.com" />
     <link rel="icon" href="https://customer-assets.emergentagent.com/job_frameify-store/artifacts/6aq8xona_LOGO.png" />
     <script type="application/ld+json">
       {JSON.stringify({
@@ -100,7 +101,7 @@ const SEOHead = () => (
         },
         "telephone": "+91 81480 40148",
         "email": "memories@photogifthub.com",
-        "url": "https://photo-frames-dash.preview.emergentagent.com",
+        "url": "https://memoriesngifts.com",
         "openingHours": ["Mo-Sa 09:30-21:00"],
         "priceRange": "₹₹",
         "aggregateRating": {
@@ -1096,7 +1097,6 @@ const Home = () => {
       <Footer />
       <WhatsAppFloat />
       <ChatWidget />
-      <Toaster />
     </div>
   );
 };
@@ -1107,10 +1107,12 @@ function App() {
       <AuthProvider>
         <CartProvider>
           <div className="App">
+            <Toaster />
             <BrowserRouter>
               <Routes>
                 <Route path="/" element={<Home />} />
                 <Route path="/about" element={<AboutUsPage />} />
+                <Route path="/product/:slug" element={<ProductDetailPage />} />
                 <Route path="/admin" element={<AdminPanel />} />
               </Routes>
             </BrowserRouter>

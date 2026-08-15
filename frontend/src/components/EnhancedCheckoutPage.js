@@ -218,31 +218,42 @@ export const EnhancedCheckoutPage = ({ onClose }) => {
         final: getFinalTotal(),
       };
 
+      const items = cartItems.map((it) => ({
+        product_id: it.productId || it.id,
+        variant_id: it.variantId || null,
+        name: it.name,
+        price: it.price,
+        quantity: it.quantity,
+        image: it.image,
+        category: it.category,
+        customOptions: it.customOptions || {},
+      }));
+      const deliveryAddress = {
+        name: formData.name,
+        phone: formData.phone,
+        email: formData.email,
+        address: formData.deliveryType === 'delivery' ? formData.address : '',
+        instructions: formData.instructions,
+      };
+
+      // Online payment (Razorpay): server creates the order + amount; NO wallet pre-deduction
+      if (formData.paymentMethod === 'razorpay') {
+        await handleRazorpayPayment(items, deliveryAddress, totals);
+        return;
+      }
+
+      // COD / pickup: existing flow (Sprint 1) — create order, then optional wallet payment
       const orderPayload = {
         user_id: user?.id || `guest_${Date.now()}`,
-        items: cartItems.map((it) => ({
-          product_id: it.productId || it.id,
-          name: it.name,
-          price: it.price,
-          quantity: it.quantity,
-          image: it.image,
-          category: it.category,
-        })),
+        items,
         total_amount: totals.final,
         delivery_type: formData.deliveryType,
-        delivery_address: {
-          name: formData.name,
-          phone: formData.phone,
-          email: formData.email,
-          address: formData.deliveryType === 'delivery' ? formData.address : '',
-          instructions: formData.instructions,
-        },
+        delivery_address: deliveryAddress,
       };
 
       const res = await axios.post(`${API}/orders`, orderPayload);
       const order = res.data;
 
-      // Deduct from backend wallet if used
       if (useWalletBalance && user && totals.walletDiscount > 0) {
         try {
           await axios.post(`${API}/users/${user.id}/wallet/pay`, null, {
@@ -251,12 +262,6 @@ export const EnhancedCheckoutPage = ({ onClose }) => {
         } catch (err) {
           console.error('Wallet payment failed:', err);
         }
-      }
-
-      // Online payment (Razorpay) flow
-      if (formData.paymentMethod === 'razorpay') {
-        await handleRazorpayPayment(order, totals);
-        return;
       }
 
       finalizeOrder(order, totals);
@@ -285,17 +290,17 @@ export const EnhancedCheckoutPage = ({ onClose }) => {
     });
   };
 
-  // Verify payment with backend, then finalize
-  const verifyAndFinalize = async (order, totals, rzpResponse = {}) => {
+  // Verify payment with backend (uses server-stored razorpay_order_id), then finalize
+  const verifyAndFinalize = async (memoriesOrderId, totals, rzpResponse = {}) => {
     try {
       await axios.post(`${API}/payments/verify`, {
-        order_id: order.id,
+        order_id: memoriesOrderId,
         razorpay_payment_id: rzpResponse.razorpay_payment_id || null,
         razorpay_order_id: rzpResponse.razorpay_order_id || null,
         razorpay_signature: rzpResponse.razorpay_signature || null,
       });
       toast.success('✅ Payment verified!');
-      finalizeOrder(order, totals);
+      finalizeOrder({ id: memoriesOrderId, created_at: new Date().toISOString(), points_earned: totals.pointsEarned || 0 }, totals);
     } catch (err) {
       console.error('Payment verification failed:', err);
       toast.error(err.response?.data?.detail || 'Payment verification failed. Please contact support.');
@@ -304,16 +309,34 @@ export const EnhancedCheckoutPage = ({ onClose }) => {
     }
   };
 
-  // Razorpay Checkout: mock mode simulates instant success; production opens the modal
-  const handleRazorpayPayment = async (order, totals) => {
-    // MOCK MODE: simulate a successful payment so the full flow is testable in-browser
-    if (paymentConfig.mode !== 'production' || !paymentConfig.razorpay_key_id) {
-      toast.info('Mock payment mode — simulating a successful Razorpay payment...');
-      await verifyAndFinalize(order, totals, {});
+  // Razorpay Checkout: backend creates the order + amount (server-authoritative).
+  // mock mode simulates instant success; production opens the modal with the server order_id.
+  const handleRazorpayPayment = async (items, deliveryAddress, totals) => {
+    // Ask the backend to create the Memories order + Razorpay order (amount computed server-side)
+    let payInfo;
+    try {
+      const res = await axios.post(`${API}/payments/create-order`, {
+        user_id: user?.id || `guest_${Date.now()}`,
+        items,
+        delivery_type: formData.deliveryType,
+        delivery_address: deliveryAddress,
+        use_store_credit: !!(useWalletBalance && user),
+      });
+      payInfo = res.data;
+    } catch (err) {
+      toast.error(err.response?.data?.detail || 'Could not start payment. Please try again.');
+      setIsSubmitting(false);
       return;
     }
 
-    // PRODUCTION MODE: open the real Razorpay Checkout modal
+    // MOCK MODE: simulate a successful payment so the full flow is testable in-browser
+    if (payInfo.mode !== 'production' || !payInfo.key_id) {
+      toast.info('Mock payment mode — simulating a successful Razorpay payment...');
+      await verifyAndFinalize(payInfo.memories_order_id, totals, {});
+      return;
+    }
+
+    // PRODUCTION MODE: open the real Razorpay Checkout modal with the SERVER-created order id
     const loaded = await loadRazorpayScript();
     if (!loaded) {
       toast.error('Failed to load Razorpay. Please try again.');
@@ -322,15 +345,14 @@ export const EnhancedCheckoutPage = ({ onClose }) => {
     }
 
     const options = {
-      key: paymentConfig.razorpay_key_id,
-      amount: Math.round(totals.final * 100), // paise
-      currency: 'INR',
+      key: payInfo.key_id,
+      amount: payInfo.amount, // paise, server-calculated
+      currency: payInfo.currency || 'INR',
+      order_id: payInfo.razorpay_order_id, // server-created Razorpay order id
       name: 'Memories',
-      description: `Order #${order.id.substring(0, 8).toUpperCase()}`,
-      // NOTE: For production, generate an order on Razorpay via a backend endpoint
-      // and pass order_id here. Signature is verified by POST /api/payments/verify.
+      description: `Order #${payInfo.memories_order_id.substring(0, 8).toUpperCase()}`,
       handler: (response) => {
-        verifyAndFinalize(order, totals, response);
+        verifyAndFinalize(payInfo.memories_order_id, totals, response);
       },
       prefill: {
         name: formData.name,
@@ -340,6 +362,7 @@ export const EnhancedCheckoutPage = ({ onClose }) => {
       theme: { color: '#e11d48' },
       modal: {
         ondismiss: () => {
+          // Cancelled: do NOT mark paid, do NOT deduct credit, allow retry
           toast.error('Payment cancelled.');
           setIsSubmitting(false);
         },

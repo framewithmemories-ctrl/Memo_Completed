@@ -35,18 +35,20 @@ export const CartProvider = ({ children }) => {
     setCartCount(cartItems.length);
   }, [cartItems]);
 
-  const addToCart = (product, customOptions = {}) => {
+  const addToCart = (product, customOptions = {}, opts = {}) => {
     try {
+      const price = opts.price != null ? opts.price : product.base_price;
       const cartItem = {
         id: `${product.id}_${Date.now()}`,
         productId: product.id,
+        variantId: opts.variantId || null,
         name: product.name,
         description: product.description,
-        price: product.base_price,
-        image: product.image_url,
+        price,
+        image: opts.image || product.image_url || (product.media && product.media.primary_image),
         category: product.category,
         customOptions,
-        quantity: 1,
+        quantity: opts.quantity || 1,
         addedAt: new Date().toISOString()
       };
 
@@ -56,7 +58,7 @@ export const CartProvider = ({ children }) => {
       });
 
       toast.success(`✅ ${product.name} added to cart!`, {
-        description: `Price: ₹${product.base_price}`,
+        description: `Price: ₹${price}`,
         duration: 3000,
       });
 

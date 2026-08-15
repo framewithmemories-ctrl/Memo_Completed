@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from "react";
+import { useNavigate } from "react-router-dom";
 import axios from "axios";
 import { Button } from "./ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "./ui/card";
@@ -358,6 +359,9 @@ export const AboutUsSection = () => {
 export const ProductGrid = ({ products }) => {
   const [selectedCategory, setSelectedCategory] = useState('All');
   const { addToCart } = useCart();
+  const navigate = useNavigate();
+
+  const goToProduct = (product) => navigate(`/product/${product.slug || product.id}`);
 
   useEffect(() => {
     const handleShopFilter = (e) => {
@@ -522,9 +526,9 @@ export const ProductGrid = ({ products }) => {
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-8">
           {filteredProducts.map((product, index) => (
             <Card key={`${product.id}-${index}`} className="group hover:shadow-2xl transition-all duration-300 border-rose-100 hover:border-rose-200 overflow-hidden transform hover:scale-105">
-              <div className="relative overflow-hidden">
+              <div className="relative overflow-hidden cursor-pointer" onClick={() => goToProduct(product)} data-testid={`product-card-image-${product.id}`}>
                 <img 
-                  src={product.image_url}
+                  src={product.image_url || (product.media && product.media.primary_image)}
                   alt={`${product.name} - Premium quality custom ${product.category}`}
                   className="w-full h-64 object-cover group-hover:scale-110 transition-transform duration-300"
                 />
@@ -539,7 +543,7 @@ export const ProductGrid = ({ products }) => {
               </div>
               
               <CardHeader className="pb-2">
-                <CardTitle className="text-lg font-semibold text-gray-900 group-hover:text-rose-600 transition-colors">
+                <CardTitle className="text-lg font-semibold text-gray-900 group-hover:text-rose-600 transition-colors cursor-pointer" onClick={() => goToProduct(product)} data-testid={`product-card-title-${product.id}`}>
                   {product.name}
                 </CardTitle>
                 <CardDescription className="text-gray-600">
@@ -571,7 +575,8 @@ export const ProductGrid = ({ products }) => {
                     <Button 
                       variant="outline" 
                       className="border-rose-200 text-rose-700 hover:bg-rose-50 text-xs"
-                      onClick={() => document.getElementById('customizer').scrollIntoView({behavior: 'smooth'})}
+                      onClick={() => goToProduct(product)}
+                      data-testid={`product-card-view-${product.id}`}
                     >
                       <Palette className="w-3 h-3 mr-1" />
                       Customize
