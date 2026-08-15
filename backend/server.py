@@ -9,6 +9,7 @@ from pathlib import Path
 from pydantic import BaseModel, Field
 from typing import List, Optional
 import uuid
+import re
 from datetime import datetime, timezone, timedelta
 import jwt as pyjwt
 import bcrypt
@@ -18,10 +19,12 @@ import secrets
 import string
 import hashlib
 import hmac
+import math
 from gemini_helper import gemini_generate, gemini_available
 import base64
 import io
 from PIL import Image
+
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -31,73 +34,35 @@ mongo_url = os.environ['MONGO_URL']
 client = AsyncIOMotorClient(mongo_url)
 db = client[os.environ['DB_NAME']]
 
-# Create ONE FastAPI app
+# Create the main app without a prefix
 app = FastAPI(
-    title='Memories API',
-    description='Backend API for Memories - Photo Frames & Customized Gift Shop',
-    version='1.0.0',
-    docs_url='/api/docs',
-    redoc_url='/api/redoc',
-    openapi_url='/api/openapi.json',
+    title="Memories API",
+    description="Backend API for Memories - Photo Frames & Customized Gift Shop",
+    version="1.0.0",
+    docs_url="/api/docs",
+    redoc_url="/api/redoc",
+    openapi_url="/api/openapi.json",
 )
 
-# Root endpoint for Render health check
-@app.get('/')
-def home():
+
+@app.get("/")
+async def app_root():
     return {
-        'status': 'running',
-        'message': 'Memories API',
-        'docs': '/api/docs'
+        "status": "running",
+        "message": "Memories API",
+        "docs": "/api/docs"
     }
 
-# API root endpoint
-@app.get('/api/')
-def root():
+
+@app.get("/health")
+async def health_check():
     return {
-        'message': 'Memories - Photo Frames & Customized Gift Shop API Ready! 📸🎁'
+        "status": "healthy"
     }
 
-# Optional health endpoint
-@app.get('/health')
-def health():
-    return {
-        'status': 'healthy'
-    }
 
 # Create a router with the /api prefix
-api_router = APIRouter(prefix='/api')
-
-# ============================ Auth helpers (defined early so routes can use them) ============================
-JWT_SECRET = os.environ['JWT_SECRET']
-JWT_ALG = 'HS256'
-security = HTTPBearer(auto_error=False)
-
-# ============================ Payment (Razorpay) config ============================
-PAYMENT_MODE = os.environ.get('PAYMENT_MODE', 'mock')
-RAZORPAY_KEY_ID = os.environ.get('RAZORPAY_KEY_ID', 'mock')
-RAZORPAY_KEY_SECRET = os.environ.get('RAZORPAY_KEY_SECRET', 'mock')
-
-
-def hash_password(pw: str) -> str:
-    return bcrypt.hashpw(pw.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
-
-
-def verify_password(pw: str, hashed: str) -> bool:
-    try:
-        return bcrypt.checkpw(pw.encode('utf-8'), hashed.encode('utf-8'))
-    except Exception:
-        return False
-
-
-def create_token(sub: str, role: str, extra: dict = None) -> str:
-    payload = {
-        'sub': sub,
-        'role': role,
-        'exp': datetime.now(timezone.utc) + timedelta(days=7),
-    }
-    if extra:
-        payload.update(extra)
-    return pyjwt.encode(payload, JWT_SECRET, algorithm=JWT_ALG)
+api_router = APIRouter(prefix="/api")
 
 # ============================ Auth helpers (defined early so routes can use them) ============================
 JWT_SECRET = os.environ["JWT_SECRET"]
@@ -232,16 +197,86 @@ class ReviewCreate(BaseModel):
     photos: Optional[List[str]] = []
     product_id: Optional[str] = None
 
+class ProductVariant(BaseModel):
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    name: str                      # e.g. "8x10 / Wood"
+    price_delta: float = 0.0       # added to base_price
+    sku: Optional[str] = None
+    in_stock: bool = True
+
+
+class ProductCustomization(BaseModel):
+    enabled: bool = False
+    photo_upload: bool = False
+    min_photos: int = 0
+    max_photos: int = 1
+    name: bool = False
+    date: bool = False
+    message: bool = False
+    quote: bool = False
+    logo_upload: bool = False
+    preview: bool = False
+
+
+class ProductMedia(BaseModel):
+    primary_image: Optional[str] = None
+    gallery: List[str] = []
+    video_url: Optional[str] = None
+
+
+class ProductFulfilment(BaseModel):
+    production_days: int = 3
+    pickup_available: bool = True
+    delivery_available: bool = True
+
+
+class ProductMarketing(BaseModel):
+    featured: bool = False
+    bestseller: bool = False
+    new_arrival: bool = False
+    trending: bool = False
+
+
+class ProductSEO(BaseModel):
+    title: Optional[str] = None
+    meta_description: Optional[str] = None
+
+
+class ProductStatus(BaseModel):
+    active: bool = True
+    published: bool = True
+
+
 class Product(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    # identity
     name: str
     description: str
+    sku: Optional[str] = None
+    slug: Optional[str] = None
+    short_description: Optional[str] = ""
+    # classification
     category: str
+    subcategory: Optional[str] = None
+    tags: List[str] = []
+    occasions: List[str] = []
+    recipients: List[str] = []
+    # pricing
     base_price: float
-    sizes: List[dict]
-    materials: List[dict]
-    colors: List[dict]
+    compare_at_price: Optional[float] = None
+    variants: List[ProductVariant] = []
+    # legacy option arrays (kept for backward compatibility)
+    sizes: List[dict] = []
+    materials: List[dict] = []
+    colors: List[dict] = []
     image_url: str
+    # grouped V2 fields (all defaulted -> old docs load fine)
+    customization: ProductCustomization = Field(default_factory=ProductCustomization)
+    media: ProductMedia = Field(default_factory=ProductMedia)
+    fulfilment: ProductFulfilment = Field(default_factory=ProductFulfilment)
+    marketing: ProductMarketing = Field(default_factory=ProductMarketing)
+    seo: ProductSEO = Field(default_factory=ProductSEO)
+    status: ProductStatus = Field(default_factory=ProductStatus)
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 class ProductCreate(BaseModel):
@@ -249,10 +284,26 @@ class ProductCreate(BaseModel):
     description: str
     category: str
     base_price: float
-    sizes: List[dict]
-    materials: List[dict]
-    colors: List[dict]
     image_url: str
+    # optional V2 fields (all backward-compatible)
+    sku: Optional[str] = None
+    slug: Optional[str] = None
+    short_description: Optional[str] = ""
+    subcategory: Optional[str] = None
+    tags: List[str] = []
+    occasions: List[str] = []
+    recipients: List[str] = []
+    compare_at_price: Optional[float] = None
+    variants: List[ProductVariant] = []
+    sizes: List[dict] = []
+    materials: List[dict] = []
+    colors: List[dict] = []
+    customization: Optional[ProductCustomization] = None
+    media: Optional[ProductMedia] = None
+    fulfilment: Optional[ProductFulfilment] = None
+    marketing: Optional[ProductMarketing] = None
+    seo: Optional[ProductSEO] = None
+    status: Optional[ProductStatus] = None
 
 class CustomDesign(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
@@ -348,10 +399,20 @@ class Order(BaseModel):
     items: List[dict]
     total_amount: float
     status: str = "pending"
+    # V2 status architecture (backward-compatible defaults for old orders)
+    payment_status: str = "pending"      # pending | paid | failed | refunded
+    order_status: str = "pending"        # pending | confirmed | processing | completed | cancelled | refunded
+    production_status: str = "not_started"  # not_started | design_pending | production | ready
+    shipping_status: str = "not_required"   # not_required | pending | shipped | delivered
     delivery_type: str  # "pickup" or "delivery"
     delivery_address: Optional[dict] = None
     pickup_slot: Optional[str] = None
     points_earned: int = 0
+    razorpay_order_id: Optional[str] = None
+    razorpay_payment_id: Optional[str] = None
+    store_credit_applied: float = 0.0
+    payment_attempts: int = 0
+    payment_updated_at: Optional[datetime] = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 class OrderCreate(BaseModel):
@@ -501,6 +562,47 @@ sample_products = [
 async def root():
     return {"message": "Memories - Photo Frames & Customized Gift Shop API Ready! 📸🎁"}
 
+@api_router.get("/version")
+async def version_info():
+    """TEMPORARY deploy-verification endpoint. Remove after verification."""
+    commit = (
+        os.environ.get("RENDER_GIT_COMMIT")
+        or os.environ.get("GIT_COMMIT")
+        or ""
+    )
+    if not commit:
+        try:
+            import subprocess
+            commit = subprocess.check_output(
+                ["git", "rev-parse", "HEAD"], cwd=str(ROOT_DIR), stderr=subprocess.DEVNULL
+            ).decode().strip()
+        except Exception:
+            commit = "unknown"
+    return {
+        "git_commit": commit,
+        "app_version": app.version,
+        "docs_url": app.docs_url,
+        "openapi_url": app.openapi_url,
+        "registered_routes": len(app.routes),
+    }
+
+def _slugify(text: str) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "-", (text or "").lower()).strip("-")
+    return slug or uuid.uuid4().hex[:8]
+
+
+def _normalize_product(doc: dict) -> Product:
+    """Fill V2 defaults for legacy product docs so old products keep working.
+    Backfills slug and media.primary_image from legacy fields without requiring a migration."""
+    if not doc.get("slug"):
+        doc["slug"] = _slugify(doc.get("name", ""))
+    media = doc.get("media") or {}
+    if not media.get("primary_image"):
+        media["primary_image"] = doc.get("image_url")
+    doc["media"] = media
+    return Product(**doc)
+
+
 @api_router.get("/products", response_model=List[Product])
 async def get_products(category: Optional[str] = None):
     query = {}
@@ -515,20 +617,26 @@ async def get_products(category: Optional[str] = None):
             await db.products.insert_one(product.dict())
         products = await db.products.find(query).to_list(100)
     
-    return [Product(**product) for product in products]
+    return [_normalize_product(product) for product in products]
 
 @api_router.post("/products", response_model=Product)
 async def create_product(product: ProductCreate, admin=Depends(require_admin)):
-    product_obj = Product(**product.dict())
+    data = {k: v for k, v in product.dict().items() if v is not None}
+    if not data.get("slug"):
+        data["slug"] = _slugify(data.get("name", ""))
+    product_obj = Product(**data)
+    if not product_obj.media.primary_image:
+        product_obj.media.primary_image = product_obj.image_url
     await db.products.insert_one(product_obj.dict())
     return product_obj
 
 @api_router.get("/products/{product_id}", response_model=Product)
 async def get_product(product_id: str):
-    product = await db.products.find_one({"id": product_id})
+    # Look up by id first, then by slug (supports future product detail pages)
+    product = await db.products.find_one({"id": product_id}) or await db.products.find_one({"slug": product_id})
     if not product:
         raise HTTPException(status_code=404, detail="Product not found")
-    return Product(**product)
+    return _normalize_product(product)
 
 @api_router.post("/users", response_model=User)
 async def create_user(user: UserCreate, admin=Depends(require_admin)):
@@ -542,7 +650,7 @@ async def create_user(user: UserCreate, admin=Depends(require_admin)):
     return user_obj
 
 @api_router.get("/users/{user_id}", response_model=User)
-async def get_user(user_id: str):
+async def get_user(user_id: str, owner=Depends(verify_user_access)):
     user = await db.users.find_one({"id": user_id})
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
@@ -555,44 +663,58 @@ async def create_design(design: CustomDesignCreate):
     return design_obj
 
 @api_router.get("/designs/{user_id}")
-async def get_user_designs(user_id: str):
+async def get_user_designs(user_id: str, owner=Depends(verify_user_access)):
     designs = await db.designs.find({"user_id": user_id}).to_list(50)
     return [CustomDesign(**design) for design in designs]
 
 @api_router.post("/upload-image")
 async def upload_image(file: UploadFile = File(...)):
-    if not file.content_type.startswith('image/'):
+    if not file.content_type or not file.content_type.startswith('image/'):
         raise HTTPException(status_code=400, detail="File must be an image (JPG, PNG, HEIC)")
-    
-    # Read and process image
+
+    # Read and enforce a maximum upload size (15 MB) to protect the server
+    MAX_UPLOAD_BYTES = 15 * 1024 * 1024
     contents = await file.read()
-    
-    # Convert to base64 for storage/preview
-    image_base64 = base64.b64encode(contents).decode('utf-8')
-    
-    # Basic image validation with enhanced feedback
+    if not contents:
+        raise HTTPException(status_code=400, detail="Empty file uploaded")
+    if len(contents) > MAX_UPLOAD_BYTES:
+        raise HTTPException(status_code=413, detail="Image too large (max 15 MB)")
+
+    # Verify the bytes are a real, supported image (guards against decompression bombs
+    # and non-image files disguised with an image content-type)
+    ALLOWED_FORMATS = {"JPEG", "PNG", "HEIF", "HEIC", "MPO"}
     try:
-        image = Image.open(io.BytesIO(contents))
+        Image.MAX_IMAGE_PIXELS = 40_000_000  # ~40MP cap (decompression-bomb guard)
+        verify_img = Image.open(io.BytesIO(contents))
+        verify_img.verify()  # structural check
+        image = Image.open(io.BytesIO(contents))  # reopen (verify() consumes the file)
+        if image.format not in ALLOWED_FORMATS:
+            raise HTTPException(status_code=400, detail="Unsupported image format. Use JPG, PNG or HEIC.")
         width, height = image.size
-        
-        # Quality warning with specific recommendations
-        quality_warning = width < 1500 or height < 1500
-        
-        if quality_warning:
-            message = f"⚠️ Image resolution is {width}x{height}px. For best print quality, we recommend minimum 2000x2000px. Current image is suitable for smaller sizes (8x10 or 12x16)."
-        else:
-            message = f"✅ Excellent quality image ({width}x{height}px) - Perfect for all frame sizes!"
-        
-        return {
-            "success": True,
-            "image_data": image_base64,
-            "dimensions": {"width": width, "height": height},
-            "quality_warning": quality_warning,
-            "message": message,
-            "recommended_sizes": ["8x10", "12x16"] if quality_warning else ["8x10", "12x16", "16x20", "20x24"]
-        }
+    except HTTPException:
+        raise
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid image file. Please upload JPG, PNG, or HEIC format.")
+
+    # Convert to base64 for storage/preview
+    image_base64 = base64.b64encode(contents).decode('utf-8')
+
+    # Quality warning with specific recommendations
+    quality_warning = width < 1500 or height < 1500
+
+    if quality_warning:
+        message = f"⚠️ Image resolution is {width}x{height}px. For best print quality, we recommend minimum 2000x2000px. Current image is suitable for smaller sizes (8x10 or 12x16)."
+    else:
+        message = f"✅ Excellent quality image ({width}x{height}px) - Perfect for all frame sizes!"
+
+    return {
+        "success": True,
+        "image_data": image_base64,
+        "dimensions": {"width": width, "height": height},
+        "quality_warning": quality_warning,
+        "message": message,
+        "recommended_sizes": ["8x10", "12x16"] if quality_warning else ["8x10", "12x16", "16x20", "20x24"]
+    }
 
 @api_router.post("/gift-suggestions")
 async def get_gift_suggestions(request: EnhancedGiftRequest):
@@ -891,9 +1013,47 @@ async def get_chat_history(session_id: str):
 
 @api_router.post("/orders", response_model=Order)
 async def create_order(order: OrderCreate):
-    # Calculate points earned (3% of order value for Memories customers)
-    points_earned = int(order.total_amount * 0.03)
-    
+    # --- Financial integrity: never blindly trust client totals ---
+    if not order.items:
+        raise HTTPException(status_code=400, detail="Order must contain at least one item")
+
+    computed_subtotal = 0.0
+    for item in order.items:
+        try:
+            qty = int(item.get("quantity", 0))
+            price = float(item.get("price", 0))
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="Invalid item price or quantity")
+        if qty <= 0 or qty > 100:
+            raise HTTPException(status_code=400, detail="Invalid item quantity")
+        if not math.isfinite(price) or price < 0 or price > 1_000_000:
+            raise HTTPException(status_code=400, detail="Invalid item price")
+        # Source-of-truth: submitted price cannot be below the catalog base price (+ variant)
+        product_id = item.get("product_id") or item.get("id")
+        if product_id:
+            product = await db.products.find_one({"id": product_id})
+            if product:
+                expected_min = float(product.get("base_price", 0))
+                variant_id = item.get("variant_id")
+                if variant_id:
+                    variant = next((v for v in product.get("variants", []) if v.get("id") == variant_id), None)
+                    if not variant:
+                        raise HTTPException(status_code=400, detail="Invalid product variant")
+                    expected_min += float(variant.get("price_delta", 0))
+                if price + 0.01 < expected_min:
+                    raise HTTPException(status_code=400, detail="Item price is below the catalog price")
+        computed_subtotal += price * qty
+
+    total = order.total_amount
+    if total is None or not math.isfinite(total) or total <= 0 or total > 5_000_000:
+        raise HTTPException(status_code=400, detail="Invalid order total")
+    # Reject grossly manipulated totals (client legitimately adds tax/delivery or subtracts discounts)
+    if total < computed_subtotal * 0.4:
+        raise HTTPException(status_code=400, detail="Order total does not match items")
+
+    # Points earned from validated subtotal (server-side), not client total
+    points_earned = int(computed_subtotal * 0.03)
+
     order_dict = order.dict()
     order_dict["points_earned"] = points_earned
     order_obj = Order(**order_dict)
@@ -922,66 +1082,230 @@ class PaymentVerifyRequest(BaseModel):
     razorpay_signature: Optional[str] = None
 
 
+class PaymentCreateRequest(BaseModel):
+    user_id: str
+    items: List[dict]
+    delivery_type: str
+    delivery_address: Optional[dict] = None
+    pickup_slot: Optional[str] = None
+    use_store_credit: bool = False
+
+
+# Razorpay single-transaction ceiling (₹5,00,000). Reject anything above before calling the API.
+RAZORPAY_MAX_AMOUNT = 500000.0
+
+
+async def _compute_order_pricing(items: list, delivery_type: str, use_store_credit: bool, user: Optional[dict]):
+    """Server-authoritative pricing. Returns validated line items + totals.
+    Reuses Sprint 1 validation and the existing business rules (GST 18%, free delivery >= Rs.1000)."""
+    if not items:
+        raise HTTPException(status_code=400, detail="Order must contain at least one item")
+    subtotal = 0.0
+    for item in items:
+        try:
+            qty = int(item.get("quantity", 0))
+            price = float(item.get("price", 0))
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="Invalid item price or quantity")
+        if qty <= 0 or qty > 100:
+            raise HTTPException(status_code=400, detail="Invalid item quantity")
+        if not math.isfinite(price) or price < 0 or price > 1_000_000:
+            raise HTTPException(status_code=400, detail="Invalid item price")
+        product_id = item.get("product_id") or item.get("id")
+        if product_id:
+            product = await db.products.find_one({"id": product_id})
+            if product:
+                expected_min = float(product.get("base_price", 0))
+                variant_id = item.get("variant_id")
+                if variant_id:
+                    variant = next((v for v in product.get("variants", []) if v.get("id") == variant_id), None)
+                    if not variant:
+                        raise HTTPException(status_code=400, detail="Invalid product variant")
+                    expected_min += float(variant.get("price_delta", 0))
+                if price + 0.01 < expected_min:
+                    raise HTTPException(status_code=400, detail="Item price is below the catalog price")
+        subtotal += price * qty
+
+    delivery = 0.0 if (delivery_type == "pickup" or subtotal >= 1000) else 50.0
+    tax = round(subtotal * 0.18)
+    # Store credit applied server-side (never trusts a client amount); capped at pre-credit total
+    store_credit_applied = 0.0
+    if use_store_credit and user:
+        available = float(user.get("store_credits", 0.0) or 0.0)
+        store_credit_applied = max(0.0, min(available, subtotal + delivery + tax))
+    final_amount = max(0.0, subtotal + delivery + tax - store_credit_applied)
+    return {
+        "subtotal": subtotal, "delivery": delivery, "tax": tax,
+        "store_credit_applied": round(store_credit_applied, 2),
+        "final_amount": round(final_amount, 2),
+        "points_earned": int(subtotal * 0.03),
+    }
+
+
+async def _create_razorpay_order(amount_rupees: float):
+    """Create a Razorpay order server-side (production). Returns the razorpay order id.
+    Mock mode returns a synthetic id and never calls the network."""
+    if amount_rupees <= 0 or amount_rupees > RAZORPAY_MAX_AMOUNT:
+        raise HTTPException(status_code=400, detail="Payment amount out of allowed range")
+    amount_paise = round(amount_rupees * 100)
+    if PAYMENT_MODE != "production":
+        return f"order_mock_{uuid.uuid4().hex[:14]}"
+    if not RAZORPAY_KEY_ID or not RAZORPAY_KEY_SECRET or RAZORPAY_KEY_SECRET == "mock":
+        raise HTTPException(status_code=500, detail="Payment gateway is not configured")
+    try:
+        async with httpx.AsyncClient(timeout=15) as http:
+            resp = await http.post(
+                "https://api.razorpay.com/v1/orders",
+                auth=(RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET),
+                json={"amount": amount_paise, "currency": "INR", "payment_capture": 1},
+            )
+        if resp.status_code >= 400:
+            logger.error(f"Razorpay order creation failed: HTTP {resp.status_code}")
+            raise HTTPException(status_code=502, detail="Could not create payment order")
+        return resp.json()["id"]
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Razorpay order creation error: {type(e).__name__}")
+        raise HTTPException(status_code=502, detail="Could not create payment order")
+
+
 @api_router.get("/payments/config")
 async def get_payment_config():
-    """Expose non-sensitive payment config for the frontend checkout."""
+    """Expose non-sensitive payment config for the frontend checkout (never the secret)."""
     return {"mode": PAYMENT_MODE, "razorpay_key_id": RAZORPAY_KEY_ID if PAYMENT_MODE == "production" else ""}
+
+
+@api_router.post("/payments/create-order")
+async def create_payment_order(payload: PaymentCreateRequest):
+    """Validate cart, compute the server-authoritative amount, create a pending Memories order
+    and a matching Razorpay order, then return payment info for the frontend checkout."""
+    user = await db.users.find_one({"id": payload.user_id}) if payload.user_id else None
+    pricing = await _compute_order_pricing(payload.items, payload.delivery_type, payload.use_store_credit, user)
+
+    order_obj = Order(
+        user_id=payload.user_id,
+        items=payload.items,
+        total_amount=pricing["final_amount"],
+        delivery_type=payload.delivery_type,
+        delivery_address=payload.delivery_address,
+        pickup_slot=payload.pickup_slot,
+        points_earned=pricing["points_earned"],
+        store_credit_applied=pricing["store_credit_applied"],
+        payment_status="pending",
+        order_status="pending",
+    )
+    rzp_order_id = await _create_razorpay_order(pricing["final_amount"])
+    order_obj.razorpay_order_id = rzp_order_id
+    order_obj.payment_attempts = 1
+    await db.orders.insert_one(order_obj.dict())
+
+    return {
+        "memories_order_id": order_obj.id,
+        "razorpay_order_id": rzp_order_id,
+        "amount": round(pricing["final_amount"] * 100),  # paise
+        "currency": "INR",
+        "key_id": RAZORPAY_KEY_ID if PAYMENT_MODE == "production" else "",
+        "mode": PAYMENT_MODE,
+        "pricing": pricing,
+    }
 
 
 @api_router.post("/payments/verify")
 async def verify_payment(payload: PaymentVerifyRequest):
-    """Verify a Razorpay payment signature and move the order to 'processing'.
-
-    - mock mode: bypass signature verification (for local/testing).
-    - production mode: verify HMAC SHA256 signature over
-      f"{razorpay_order_id}|{razorpay_payment_id}" using RAZORPAY_KEY_SECRET.
-    """
+    """Verify a Razorpay payment using the SERVER-STORED razorpay_order_id, then mark paid.
+    mock mode bypasses signature; production verifies HMAC-SHA256(stored_order|payment_id)."""
     order = await db.orders.find_one({"id": payload.order_id})
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
 
-    if PAYMENT_MODE == "production":
-        if not (payload.razorpay_order_id and payload.razorpay_payment_id and payload.razorpay_signature):
-            raise HTTPException(status_code=400, detail="Missing Razorpay payment fields")
+    # Idempotency: already paid -> safe success, but reject a DIFFERENT payment_id
+    if order.get("payment_status") == "paid":
+        if payload.razorpay_payment_id and order.get("razorpay_payment_id") and \
+           payload.razorpay_payment_id != order.get("razorpay_payment_id"):
+            raise HTTPException(status_code=409, detail="Order already paid with a different payment")
+        return {"success": True, "order_id": payload.order_id,
+                "status": order.get("status", "processing"), "mode": PAYMENT_MODE, "already_paid": True}
 
-        message = f"{payload.razorpay_order_id}|{payload.razorpay_payment_id}"
+    stored_rzp_order = order.get("razorpay_order_id")
+
+    if PAYMENT_MODE == "production":
+        if not RAZORPAY_KEY_SECRET or RAZORPAY_KEY_SECRET == "mock":
+            raise HTTPException(status_code=500, detail="Payment gateway is not configured")
+        if not (payload.razorpay_payment_id and payload.razorpay_signature):
+            raise HTTPException(status_code=400, detail="Missing Razorpay payment fields")
+        if not stored_rzp_order:
+            raise HTTPException(status_code=400, detail="No Razorpay order associated with this order")
+        # Never trust a browser-supplied order id: if provided it MUST match the stored one
+        if payload.razorpay_order_id and payload.razorpay_order_id != stored_rzp_order:
+            raise HTTPException(status_code=400, detail="Razorpay order mismatch")
+
+        message = f"{stored_rzp_order}|{payload.razorpay_payment_id}"
         expected_signature = hmac.new(
             bytes(RAZORPAY_KEY_SECRET, "utf-8"),
             bytes(message, "utf-8"),
             hashlib.sha256,
         ).hexdigest()
-
         if not hmac.compare_digest(expected_signature, payload.razorpay_signature):
+            await db.orders.update_one({"id": payload.order_id},
+                                       {"$set": {"payment_status": "failed", "payment_updated_at": datetime.now(timezone.utc)}})
             raise HTTPException(status_code=400, detail="Payment signature verification failed")
 
+    # --- Payment verified: commit state exactly once ---
     await db.orders.update_one(
         {"id": payload.order_id},
         {"$set": {
             "status": "processing",
             "payment_status": "paid",
-            "razorpay_order_id": payload.razorpay_order_id,
+            "order_status": "confirmed",
             "razorpay_payment_id": payload.razorpay_payment_id,
-            "updated_at": datetime.now(timezone.utc),
+            "razorpay_signature": payload.razorpay_signature,
+            "payment_updated_at": datetime.now(timezone.utc),
         }},
     )
+
+    # Commit store-credit deduction now (only after successful payment); guard double-commit
+    sc = float(order.get("store_credit_applied", 0.0) or 0.0)
+    if sc > 0 and order.get("user_id"):
+        existing_txn = await db.wallet_transactions.find_one(
+            {"order_id": payload.order_id, "type": "debit"})
+        if not existing_txn:
+            u = await db.users.find_one({"id": order["user_id"]})
+            if u:
+                new_credit = max(0.0, float(u.get("store_credits", 0.0) or 0.0) - sc)
+                await db.users.update_one({"id": order["user_id"]}, {"$set": {"store_credits": new_credit}})
+                await db.wallet_transactions.insert_one(WalletTransaction(
+                    user_id=order["user_id"], type="debit", amount=sc,
+                    description=f"Store credit for order #{payload.order_id[:8]}",
+                    category="purchase", order_id=payload.order_id, balance_after=new_credit,
+                ).dict())
+
+    # Award purchase points once (idempotent via payment_status transition above)
+    pts = int(order.get("points_earned", 0) or 0)
+    if pts > 0 and order.get("user_id"):
+        u = await db.users.find_one({"id": order["user_id"]})
+        if u:
+            new_points = int(u.get("points", 0) or 0) + pts
+            new_tier = "Platinum" if new_points >= 5000 else "Gold" if new_points >= 2000 else "Silver"
+            await db.users.update_one({"id": order["user_id"]}, {"$set": {"points": new_points, "tier": new_tier}})
+
+    # TODO(webhook-sprint): a future Razorpay webhook should reconcile captured/failed/refund
+    # events against these fields (payment_status, razorpay_payment_id) for out-of-band updates.
     return {"success": True, "order_id": payload.order_id, "status": "processing", "mode": PAYMENT_MODE}
 
 
 @api_router.get("/orders/{user_id}")
-async def get_user_orders(user_id: str):
+async def get_user_orders(user_id: str, owner=Depends(verify_user_access)):
     orders = await db.orders.find({"user_id": user_id}).to_list(50)
     return [Order(**order) for order in orders]
 
 # Review Management Endpoints
 @api_router.post("/reviews", response_model=Review)
 async def create_review(review: ReviewCreate):
-    """Create a new customer review"""
+    """Create a new customer review (starts unapproved; admin moderates before it goes public)"""
     try:
         review_obj = Review(**review.dict())
-        
-        # For now, auto-approve all reviews (can add moderation later)
-        review_obj.approved = True
-        
+        # Reviews require admin approval before appearing publicly (approved defaults to False)
         await db.reviews.insert_one(review_obj.dict())
         return review_obj
     except Exception:
@@ -992,6 +1316,7 @@ async def get_reviews(
     limit: int = 10,
     offset: int = 0,
     rating_filter: Optional[int] = None,
+    product_id: Optional[str] = None,
     approved_only: bool = True
 ):
     """Get reviews with pagination and filtering"""
@@ -1002,6 +1327,8 @@ async def get_reviews(
             filter_query["approved"] = True
         if rating_filter:
             filter_query["rating"] = rating_filter
+        if product_id:
+            filter_query["product_id"] = product_id
         
         # Get total count
         total_count = await db.reviews.count_documents(filter_query)
@@ -1304,30 +1631,14 @@ async def get_user_wallet(user_id: str, owner=Depends(verify_user_access)):
 
 @api_router.post("/users/{user_id}/wallet/add-money")
 async def add_money_to_wallet(user_id: str, amount: float, owner=Depends(verify_user_access)):
-    user = await db.users.find_one({"id": user_id})
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
-    
-    new_balance = user.get("wallet_balance", 0.0) + amount
-    
-    # Update user wallet
-    await db.users.update_one(
-        {"id": user_id},
-        {"$set": {"wallet_balance": new_balance}}
+    # SECURITY: direct wallet top-up is disabled — a user must never be able to increase
+    # their own balance without a verified payment. Reward-point conversion (store credit)
+    # remains available via /wallet/convert-points.
+    # TODO(payment-sprint): re-enable top-up only after a verified Razorpay payment.
+    raise HTTPException(
+        status_code=403,
+        detail="Wallet top-up requires a verified payment and is currently disabled. Convert reward points to store credit instead.",
     )
-    
-    # Record transaction
-    transaction = WalletTransaction(
-        user_id=user_id,
-        type="credit",
-        amount=amount,
-        description="Money added to wallet",
-        category="topup",
-        balance_after=new_balance
-    )
-    await db.wallet_transactions.insert_one(transaction.dict())
-    
-    return {"new_balance": new_balance, "transaction_id": transaction.id}
 
 @api_router.post("/users/{user_id}/wallet/convert-points")
 async def convert_points_to_credits(user_id: str, points: int, owner=Depends(verify_user_access)):
@@ -1336,6 +1647,8 @@ async def convert_points_to_credits(user_id: str, points: int, owner=Depends(ver
         raise HTTPException(status_code=404, detail="User not found")
     
     current_points = user.get("points", 0)
+    if points <= 0:
+        raise HTTPException(status_code=400, detail="Points must be a positive number")
     if points > current_points:
         raise HTTPException(status_code=400, detail="Insufficient points")
     
@@ -1384,6 +1697,16 @@ async def get_wallet_transactions(user_id: str, limit: int = 50, owner=Depends(v
 
 @api_router.post("/users/{user_id}/wallet/pay")
 async def pay_with_wallet(user_id: str, amount: float, order_id: str, owner=Depends(verify_user_access)):
+    if not math.isfinite(amount) or amount <= 0 or amount > 1_000_000:
+        raise HTTPException(status_code=400, detail="Invalid payment amount")
+
+    # Idempotency: prevent double-deduction for the same order
+    existing = await db.wallet_transactions.find_one(
+        {"user_id": user_id, "order_id": order_id, "type": "debit"}
+    )
+    if existing:
+        raise HTTPException(status_code=409, detail="Wallet payment already recorded for this order")
+
     user = await db.users.find_one({"id": user_id})
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
@@ -1945,7 +2268,12 @@ async def get_ai_usage(admin=Depends(require_admin)):
 @api_router.post("/admin/products", response_model=Product)
 async def create_product_admin(product: ProductCreate, admin=Depends(require_admin)):
     """Create a new product (admin only)."""
-    product_obj = Product(**product.dict())
+    data = {k: v for k, v in product.dict().items() if v is not None}
+    if not data.get("slug"):
+        data["slug"] = _slugify(data.get("name", ""))
+    product_obj = Product(**data)
+    if not product_obj.media.primary_image:
+        product_obj.media.primary_image = product_obj.image_url
     await db.products.insert_one(product_obj.dict())
     return product_obj
 
@@ -1982,6 +2310,9 @@ async def update_product_admin(product_id: str, product_update: dict, admin=Depe
     """Update product (admin only)"""
     try:
         product_update.pop("id", None)
+        # Keep slug in sync when the name changes and no explicit slug provided
+        if product_update.get("name") and not product_update.get("slug"):
+            product_update["slug"] = _slugify(product_update["name"])
         result = await db.products.update_one(
             {"id": product_id},
             {"$set": product_update}
@@ -2076,10 +2407,18 @@ async def startup_create_indexes():
         for coll, field in [
             (db.users, "id"),
             (db.products, "id"),
+            (db.products, "category"),
+            (db.products, "slug"),
+            (db.orders, "id"),
             (db.orders, "user_id"),
+            (db.orders, "created_at"),
+            (db.orders, "payment_status"),
+            (db.orders, "order_status"),
             (db.wallet_transactions, "user_id"),
             (db.user_photos, "user_id"),
+            (db.designs, "user_id"),
             (db.reviews, "approved"),
+            (db.reviews, "product_id"),
             (db.ai_usage_log, "date"),
             (db.admin_audit_log, "created_at"),
         ]:
