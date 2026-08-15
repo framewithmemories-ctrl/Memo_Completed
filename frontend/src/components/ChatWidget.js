@@ -20,7 +20,7 @@ const WELCOME = {
   content: "Hi! I'm Memo 👋 your gift assistant at Memories. Ask me for gift ideas, product info, pricing, hours or directions — how can I help?",
 };
 
-// Deterministic answers for website capabilities that should never be hallucinated by the LLM.
+// Deterministic answers for website capabilities and business facts that should never be hallucinated by the LLM.
 const getSmartLocalReply = async (text) => {
   const q = text.toLowerCase().replace(/\s+/g, ' ').trim();
 
@@ -38,9 +38,10 @@ const getSmartLocalReply = async (text) => {
     return "Yes! 🎁 Memo's Gift Finder is available on the website. It asks a few questions about who you're gifting, the occasion, interests and budget, then recommends products from the current Memories catalogue. You can open it from the Gift Finder button in the top menu or the Gift Finder section on the homepage.";
   }
 
-  // Questions about recommending gifts outside the shop.
+  // Memories-first recommendation policy. Never advertise or recommend competing sellers when a customer asks for an item we don't carry.
+  // Instead, identify the underlying gifting need and offer the closest Memories solution or customization.
   if (/(outside|other|elsewhere|not.*memories|from.*other).*(gift|product|item)/i.test(q) || /gift.*(outside|other shops|elsewhere)/i.test(q)) {
-    return "Yes — if you ask for general gift ideas, I can also suggest ideas that Memories does not sell. 🎁 I’ll clearly label those as outside recommendations instead of pretending they are Memories products. If you want to shop directly with us, I’ll keep recommendations limited to our actual catalogue.";
+    return "I’d be happy to help! ❤️ At Memories, we specialize in personalized gifts and meaningful photo-based keepsakes. I’ll first look for something in our own collection that matches what you need, and if we don’t have the exact item, I can suggest the closest Memories alternative or a customized option. Tell me the recipient, occasion and budget, and I’ll find the best fit for you. 🎁";
   }
 
   // Latest review: use the real approved review data instead of claiming no access.
@@ -63,11 +64,6 @@ const getSmartLocalReply = async (text) => {
   // Dynamic Sunday/tomorrow questions. This avoids the old fixed-date assumption.
   if (/(tomorrow|today|open|closed).*(shop|store|business)/i.test(q) || /(shop|store).*(tomorrow|today|open|closed)/i.test(q)) {
     const now = new Date();
-    const indiaParts = new Intl.DateTimeFormat('en-IN', {
-      timeZone: 'Asia/Kolkata', weekday: 'long', hour: 'numeric', minute: '2-digit', hour12: true
-    }).formatToParts(now);
-    const getPart = (type) => indiaParts.find(p => p.type === type)?.value || '';
-    const weekday = getPart('weekday');
     const target = /tomorrow/i.test(q) ? new Date(now.getTime() + 86400000) : now;
     const targetWeekday = new Intl.DateTimeFormat('en-IN', { timeZone: 'Asia/Kolkata', weekday: 'long' }).format(target);
     const closed = targetWeekday === 'Sunday';
