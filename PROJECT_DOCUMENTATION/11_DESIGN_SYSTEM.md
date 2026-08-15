@@ -2,47 +2,88 @@
 
 ## Purpose
 
-Catalogue and backend work must not accidentally change the storefront's visual identity. Product data, filtering, imports and admin tooling are separate from the customer-facing design system.
+The storefront should feel like a joyful, trustworthy personalized-gifting brand: colourful because the products and memories are colourful, but calm enough that the products remain the visual focus.
 
-## Current visual foundation
+## Brand assessment
 
-The frontend uses Tailwind CSS with CSS-variable design tokens in `frontend/src/index.css`. The current token system provides background, foreground, card, popover, primary, secondary, muted, accent, destructive, border, input, ring and chart colors, plus shared radius tokens.
+The supplied Memories logo is a strong brand asset. It combines a camera, photo-frame/creative gesture and gift icon, while the MEMORIES wordmark uses a bold red/coral + blue identity. The multicolour camera lens adds the playful/photo-gifting character. It is distinctive and clearly appropriate for a photo-frame and personalized-gift ecommerce business.
 
-## Preservation rule
+Design rating of the current logo: **8.5/10**.
 
-Until an explicit visual redesign task is approved:
+Strengths:
+- Immediately communicates photography + gifts.
+- Red/coral and blue provide strong recognition.
+- Multicolour lens gives the brand a joyful, creative cue.
+- Wordmark and slogan make the business purpose clear.
 
-- Do not replace the existing storefront palette globally.
-- Do not introduce arbitrary per-product colors into the storefront UI.
-- Do not change typography, spacing, button shape, card treatment, header/navigation styling or responsive breakpoints merely to support catalogue growth.
-- Product images should remain the visual focus of catalogue cards.
-- New catalogue/filter/admin components must consume the existing Tailwind/CSS-variable tokens instead of hard-coded colors.
-- AI badges, availability labels and status indicators should use semantic existing tokens rather than creating a new palette.
-- Admin UI may be denser than the storefront, but should still use the same token system.
-- The Memories brand/logo and existing visual identity remain the source of truth; a FrameIt-like feature must use Memories branding rather than copying another company's branding.
+Opportunities for later brand-polish work:
+- The logo has several visual elements, so surrounding UI should stay clean rather than competing with it.
+- Small-size usage should use an approved simplified mark if legibility becomes an issue.
+- Keep the tagline readable and do not force it into very small header placements.
 
-## Current palette note
+## Recommended Memories web palette
 
-The base CSS variables currently use a neutral black/white shadcn-style palette. This is an implementation detail of the current codebase, not a declaration that Memories must permanently use a monochrome brand palette. A future brand-polish pass can define a deliberate Memories palette in one place without rewriting individual components.
+Memories is **not a jewellery/luxury-gold brand**. Gold/champagne should therefore be an occasional premium accent, never the dominant visual language.
+
+Use the logo's red/coral and blue as the primary brand anchors, with warm white/ivory and charcoal as the neutral foundation.
+
+Approximate logo-derived reference colours (to be refined from the master brand artwork if an official palette is supplied):
+- Memories Coral/Red: `#EF4038`
+- Memories Blue: `#1050B8`
+- Warm White: `#FFFCF8`
+- Charcoal: `#242424`
+- Soft Blush: `#FFF1F3` (supporting background only)
+- Soft Blue Tint: `#EEF5FF` (supporting background only)
+- Premium Champagne: `#D6B46A` (small, semantic premium accent only)
+
+The coral and blue should carry the brand. Warm white/ivory provides breathing room. Product photography should provide most of the remaining colour.
+
+## Visual target
+
+**Premium + joyful + warm + trustworthy.**
+
+Avoid both extremes:
+- Not a jewellery-style gold/black luxury store.
+- Not a rainbow/gradient-heavy novelty site.
+
+The desired impression is a polished personalized-gift store where colourful products and customer memories are the stars.
+
+## Current frontend assessment
+
+The existing homepage is approximately **7/10 visually**. It has strong energy and clearly communicates colourful gifting, but it currently uses many simultaneous gradients, animations and accent colours. The later visual-polish phase should simplify this hierarchy rather than adding more colour.
+
+## Design rules
+
+- Product images remain the primary source of visual colour.
+- Use coral/red and blue for brand CTAs, links, active states and key accents.
+- Use blush/blue tints for occasional section backgrounds, not every section.
+- Use green only for semantic success/WhatsApp states.
+- Use champagne/gold only for genuinely premium semantics.
+- Avoid rainbow gradients as a default UI treatment.
+- Avoid arbitrary per-product UI colours.
+- Keep cards clean and product-focused.
+- Use soft shadows and restrained borders.
+- Keep animations subtle and purposeful.
+- Do not change typography, spacing, card treatment, header/navigation or responsive behaviour merely to support catalogue growth.
+- New catalogue/filter/admin components must consume centralized CSS/Tailwind tokens rather than hard-coded colours.
+- The Memories logo and this palette are the visual source of truth.
 
 ## Catalogue visual rules
 
 Every product should support:
-
 1. One clear primary image.
 2. Optional gallery images.
 3. Consistent aspect-ratio handling in cards.
-4. No broken-image layout when an optional gallery image is missing.
-5. Product status should affect visibility, not create distracting visual noise.
-6. Marketing flags such as bestseller/new arrival/featured should be semantic badges, not custom colors per product.
+4. A graceful missing/slow-image state.
+5. Status affecting visibility rather than adding visual noise.
+6. Semantic badges such as Bestseller, New, Sale and Premium using the brand token system.
 
 ## QA gate
 
-Before merging catalogue/admin UI work:
-
+Before merging storefront/admin UI work:
 - Verify desktop and mobile layouts.
-- Verify light/dark behavior where supported by the existing theme system.
-- Verify keyboard focus and readable contrast.
-- Verify long product names and descriptions do not break cards.
+- Verify readable contrast and keyboard focus.
+- Verify long product names/descriptions do not break cards.
 - Verify missing/slow images have a graceful state.
-- Verify no global CSS regression was introduced.
+- Verify no global CSS regression.
+- Compare major storefront screens against the visual target above.
