@@ -20,6 +20,70 @@ const WELCOME = {
   content: "Hi! I'm Memo 👋 your gift assistant at Memories. Ask me for gift ideas, product info, pricing, hours or directions — how can I help?",
 };
 
+// Deterministic answers for website capabilities that should never be hallucinated by the LLM.
+const getSmartLocalReply = async (text) => {
+  const q = text.toLowerCase().replace(/\s+/g, ' ').trim();
+
+  // Account/profile questions: the site DOES support customer accounts.
+  if (
+    /(open|create|make|register|signup|sign up|join).*(account|profile)/i.test(q) ||
+    /(personal|user|customer).*(account|profile)/i.test(q) ||
+    /(how).*(login|log in|sign in|register)/i.test(q)
+  ) {
+    return "Absolutely! Memories has customer accounts. 👤 Click the person/account icon in the top-right corner of the website, then choose Create Account and enter your name, email, password and phone number. Once registered, you can use your profile to track orders, save photos, use your wallet/store credits and manage your account. If you already have an account, choose Sign In instead.";
+  }
+
+  // Gift Finder questions: don't claim that it is unavailable or pretend it is WhatsApp-only.
+  if (/(gift finder|giftfinder)/i.test(q) && /(work|working|available|use|how|where|find)/i.test(q)) {
+    return "Yes! 🎁 Memo's Gift Finder is available on the website. It asks a few questions about who you're gifting, the occasion, interests and budget, then recommends products from the current Memories catalogue. You can open it from the Gift Finder button in the top menu or the Gift Finder section on the homepage.";
+  }
+
+  // Questions about recommending gifts outside the shop.
+  if (/(outside|other|elsewhere|not.*memories|from.*other).*(gift|product|item)/i.test(q) || /gift.*(outside|other shops|elsewhere)/i.test(q)) {
+    return "Yes — if you ask for general gift ideas, I can also suggest ideas that Memories does not sell. 🎁 I’ll clearly label those as outside recommendations instead of pretending they are Memories products. If you want to shop directly with us, I’ll keep recommendations limited to our actual catalogue.";
+  }
+
+  // Latest review: use the real approved review data instead of claiming no access.
+  if (/(latest|recent|newest|last).*(review|reviews)/i.test(q) || /(review|reviews).*(latest|recent|newest|last)/i.test(q)) {
+    try {
+      const res = await axios.get(`${API}/reviews?limit=20&offset=0&approved_only=true`);
+      const reviews = Array.isArray(res.data?.reviews) ? res.data.reviews : [];
+      if (!reviews.length) {
+        return "I couldn't find an approved customer review right now. I can still take you to the Reviews section, or you can check our Google reviews from the shop's review area.";
+      }
+      const latest = [...reviews].sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0))[0];
+      const stars = '★'.repeat(Math.max(0, Math.min(5, Number(latest.rating) || 0)));
+      const date = latest.created_at ? new Date(latest.created_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }) : '';
+      return `Here’s the latest approved review I found ⭐${stars ? ` ${stars}` : ''}${latest.name ? ` — ${latest.name}` : ''}${date ? ` (${date})` : ''}: “${latest.comment || 'The customer did not leave a written comment.'}”`;
+    } catch (e) {
+      return "I’m unable to load the latest review at the moment. Please try again in a moment, or check the Reviews section on the website.";
+    }
+  }
+
+  // Dynamic Sunday/tomorrow questions. This avoids the old fixed-date assumption.
+  if (/(tomorrow|today|open|closed).*(shop|store|business)/i.test(q) || /(shop|store).*(tomorrow|today|open|closed)/i.test(q)) {
+    const now = new Date();
+    const indiaParts = new Intl.DateTimeFormat('en-IN', {
+      timeZone: 'Asia/Kolkata', weekday: 'long', hour: 'numeric', minute: '2-digit', hour12: true
+    }).formatToParts(now);
+    const getPart = (type) => indiaParts.find(p => p.type === type)?.value || '';
+    const weekday = getPart('weekday');
+    const target = /tomorrow/i.test(q) ? new Date(now.getTime() + 86400000) : now;
+    const targetWeekday = new Intl.DateTimeFormat('en-IN', { timeZone: 'Asia/Kolkata', weekday: 'long' }).format(target);
+    const closed = targetWeekday === 'Sunday';
+    return closed
+      ? `No, Boss 😊 Memories is closed on Sunday. We’re open Monday to Saturday, 9:30 AM–9:00 PM. If you meant a different date, tell me the date and I’ll check it for you.`
+      : `Yes — Memories is open on ${targetWeekday}, from 9:30 AM to 9:00 PM. 📍 We’re at 19B Kani Illam, Keeranatham Road, Coimbatore.`;
+  }
+
+  // Explicit owner recognition should feel personal, but only after the customer says it.
+  if (/(i am|i'm|this is).*(dinesh|dinesh sr|dinesh s r)/i.test(q)) {
+    return "Of course, Sir! 👋 I know you as Dinesh SR, the owner of Memories, because you just told me. I’ll remember that within this conversation and can speak to you as the owner when we discuss the shop. What would you like me to check?";
+  }
+
+  return null;
+};
+
 export const ChatWidget = () => {
   const { user, isAuthenticated, token } = useAuth();
   const [open, setOpen] = useState(false);
@@ -37,7 +101,6 @@ export const ChatWidget = () => {
     }
   }, [messages, open]);
 
-  // On open: logged-in users load their saved history; guests always start clean.
   useEffect(() => {
     if (!open) return;
     if (isAuthenticated && user) {
@@ -54,7 +117,6 @@ export const ChatWidget = () => {
 
   const handleClose = () => {
     setOpen(false);
-    // Guests: closing wipes the session so reopening is a fresh, clean chat.
     if (!isAuthenticated) {
       localStorage.removeItem(GUEST_KEY);
       setMessages([WELCOME]);
@@ -68,6 +130,12 @@ export const ChatWidget = () => {
     setInput('');
     setLoading(true);
     try {
+      const localReply = await getSmartLocalReply(text);
+      if (localReply) {
+        setMessages((m) => [...m, { role: 'assistant', content: localReply }]);
+        return;
+      }
+
       const res = await axios.post(`${API}/chat`, { session_id: currentSession(), message: text }, authCfg);
       setMessages((m) => [...m, { role: 'assistant', content: res.data.reply }]);
     } catch (e) {
