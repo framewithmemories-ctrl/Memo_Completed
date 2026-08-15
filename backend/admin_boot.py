@@ -1,10 +1,13 @@
-"""Memories backend entrypoint with a secure admin recovery endpoint."""
+"""Memories backend entrypoint with secure admin recovery and catalogue tools."""
 import os
 import secrets
 from datetime import datetime, timezone
 from fastapi import Form, HTTPException
 from fastapi.responses import HTMLResponse
 from server import app, db, hash_password
+
+# Register admin-only catalogue audit/media routes on the same FastAPI app.
+import catalogue_audit  # noqa: F401,E402
 
 
 def _current_recovery_secret() -> str:
