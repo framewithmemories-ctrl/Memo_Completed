@@ -21,8 +21,18 @@ code {
   z-index: 100 !important;
 }
 
-/* Checkout: use the full available viewport and keep scrolling inside the checkout,
-   rather than allowing the storefront behind it to appear over/under the cart. */
+/*
+ * Important: the cart is rendered from inside the sticky site header.
+ * The header's backdrop-filter creates a containing block for fixed children,
+ * which was trapping the checkout at the header's height. Remove that filter
+ * so the checkout can correctly use the browser viewport.
+ */
+header.sticky {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
+/* Checkout: use the full available viewport and keep scrolling inside the checkout. */
 .fixed.inset-0 > .bg-white.rounded-lg.w-full.max-w-6xl {
   height: calc(100vh - 2rem) !important;
   max-height: calc(100vh - 2rem) !important;
@@ -43,6 +53,7 @@ code {
   flex: 1 1 auto !important;
   min-height: 0 !important;
   overflow-y: auto !important;
+  overflow-x: hidden !important;
   overscroll-behavior: contain;
   -webkit-overflow-scrolling: touch;
 }
@@ -50,12 +61,21 @@ code {
 /* Keep the order-summary item list independently scrollable when it grows. */
 .fixed.inset-0 > .bg-white.rounded-lg.w-full.max-w-6xl .max-h-60 {
   max-height: min(15rem, 35vh) !important;
+  overflow-y: auto !important;
+}
+
+@media (max-height: 700px) {
+  .fixed.inset-0 > .bg-white.rounded-lg.w-full.max-w-6xl {
+    height: calc(100vh - 0.5rem) !important;
+    max-height: calc(100vh - 0.5rem) !important;
+  }
 }
 
 @media (max-width: 1023px) {
   .fixed.inset-0 > .bg-white.rounded-lg.w-full.max-w-6xl {
     height: calc(100vh - 1rem) !important;
     max-height: calc(100vh - 1rem) !important;
+    width: calc(100vw - 1rem) !important;
   }
 }
 
@@ -79,7 +99,7 @@ code {
         --muted: 0 0% 96.1%;
         --muted-foreground: 0 0% 45.1%;
         --accent: 0 0% 96.1%;
-        --accent-foreground: 0 0% 9%;
+        --accent-foreground: 0 0% 98%;
         --destructive: 0 84.2% 60.2%;
         --destructive-foreground: 0 0% 98%;
         --border: 0 0% 89.8%;
@@ -103,8 +123,7 @@ code {
         --primary-foreground: 0 0% 9%;
         --secondary: 0 0% 14.9%;
         --secondary-foreground: 0 0% 98%;
-        --muted: 0 0% 14.9%;
-        --muted-foreground: 0 0% 63.9%;
+        --muted: 0 0% 63.9%;
         --accent: 0 0% 14.9%;
         --accent-foreground: 0 0% 98%;
         --destructive: 0 62.8% 30.6%;
