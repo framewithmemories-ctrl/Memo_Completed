@@ -28,7 +28,7 @@ const WELCOME = {
 
 const parseBudget = (text) => {
   const matches = [...String(text || '').matchAll(/(?:₹|rs\.?\s*|inr\s*)([0-9]+(?:,[0-9]{3})*(?:\.[0-9]+)?)/gi)];
-  const values = matches.map(m => Number(m[1].replace(/,/g, ''))).filter(Number.isFinite);
+  const values = matches.map(m => Number(m[1].replace(/,/g, '')).filter(Number.isFinite);
   return values.length ? Math.max(...values) : null;
 };
 
@@ -65,6 +65,16 @@ const extractContext = (text, previous = {}) => {
 
 const isGreeting = (q) => /^(hi|hii|hello|hey|hey memo|good morning|good afternoon|good evening)[!. ]*$/i.test(q.trim());
 const isThanks = (q) => /^(thanks|thank you|thank u|thx)[!. ]*$/i.test(q.trim());
+
+// Product cards are intentionally gated. Memo can talk naturally about gifts, occasions,
+// relationships and the shop without visually turning every conversation into a sales pitch.
+const isExplicitProductRequest = (text = '') => {
+  const q = String(text).toLowerCase().replace(/\s+/g, ' ').trim();
+  if (!q) return false;
+  const recommendation = /(recommend|recommendation|suggest|suggestion|what (should|can|could) i (buy|gift|get|give)|what do you recommend|gift ideas|gift idea|ideas for a gift|show me (some )?(gifts|gift options|products|options)|what gifts (do you|can you) (have|suggest)|which gift|which one should i|help me choose|help me pick|shortlist|best gift|best gifts|options under|gifts under|products under|show (me )?(some )?options)/i.test(q);
+  const directProduct = /(price|pricing|how much|cost|buy|purchase|order|add to cart|do you have|do you sell|available|in stock|tell me about|show me|details of|details about)\b.*\b(frame|mug|t-?shirt|acrylic|wooden|corporate|gift|product|watch|item)\b/i.test(q);
+  return recommendation || directProduct;
+};
 
 const getSmartLocalReply = async (text, api = API) => {
   const q = text.toLowerCase().replace(/\s+/g, ' ').trim();
@@ -130,7 +140,8 @@ const scoreProduct = (p, text, context) => {
 const chooseCatalogueProducts = (products, userText, assistantText = '', context = {}) => {
   const safe = Array.isArray(products) ? products : [];
   if (!safe.length) return [];
-  if (isGreeting(userText) || isThanks(userText) || /^(help|what can you do|what do you do|how are you|how r u|how are u)[?!. ]*$/i.test(String(userText || '').trim())) return [];
+  // Hard gate: no product cards until the customer explicitly asks to see/recommend/buy a gift/product.
+  if (!isExplicitProductRequest(userText)) return [];
   const combined = `${userText} ${assistantText}`.toLowerCase();
   const explicitProduct = safe.some(p => p.name && combined.includes(p.name.toLowerCase()));
   const meaningful = explicitProduct || context.budget != null || /(birthday|anniversary|wedding|baby|valentine|mother|father|housewarming|farewell|retirement|graduation|christmas|pongal|diwali|frame|photo|mug|shirt|acrylic|wooden|led|corporate|gift|present|wife|husband|mother|father|friend|couple)/i.test(String(userText || ''));
@@ -254,9 +265,10 @@ export const ChatWidget = () => {
       }
       if (!reply) reply = getCatalogueFallbackReply(text, catalogue, nextContext);
       setMessages(m => [...m, { role: 'assistant', content: reply }]);
-      const picks = chooseCatalogueProducts(catalogue, text, reply, nextContext);
+      const wantsProducts = isExplicitProductRequest(text);
+      const picks = wantsProducts ? chooseCatalogueProducts(catalogue, text, reply, nextContext) : [];
       if (picks.length) setRecommendations(prev => ({ ...prev, [userIndex]: picks }));
-      if (aiReply && !picks.length && nextContext.occasion) {
+      if (aiReply && wantsProducts && !picks.length && nextContext.occasion) {
         const aiPicks = chooseCatalogueProducts(catalogue, `${text} ${nextContext.occasion}`, reply, nextContext);
         if (aiPicks.length) setRecommendations(prev => ({ ...prev, [userIndex]: aiPicks }));
       }
