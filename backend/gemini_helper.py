@@ -7,6 +7,7 @@ if the key is missing/invalid/quota-exceeded, it returns None and callers can fa
 import os
 import asyncio
 import logging
+import re
 from typing import Optional
 
 logger = logging.getLogger(__name__)
@@ -115,6 +116,48 @@ toward the right Memories gift—not like an automated sales pitch.
     return f"{system}{memo_behavior}"
 
 
+def _memo_local_fallback(prompt: str) -> Optional[str]:
+    """Small deterministic safety net for simple conversational turns.
+
+    This is intentionally limited to casual conversation. Gift/product requests still return
+    None so the chat endpoint can use its existing WhatsApp fallback rather than inventing
+    product information when Gemini is unavailable.
+    """
+    if not prompt:
+        return None
+
+    # Pull the latest customer message from the conversation payload.
+    matches = re.findall(r"User:\s*(.*?)\s*(?=Assistant:|$)", prompt, flags=re.IGNORECASE | re.DOTALL)
+    if not matches:
+        return None
+    text = matches[-1].strip().lower()
+    normalized = re.sub(r"[^a-z0-9? ]+", " ", text).strip()
+
+    greetings = {"hi", "hello", "hey", "hii", "hiii", "good morning", "good afternoon", "good evening"}
+    if normalized in greetings:
+        return "Hi! 😊 I’m Memo from Memories. Nice to meet you! What can I help you with today?"
+
+    if normalized in {"thanks", "thank you", "thx", "thanks memo", "thank you memo"}:
+        return "You’re very welcome! 😊 I’m here whenever you need me."
+
+    if normalized in {"ok", "okay", "okk", "great", "cool"}:
+        return "Absolutely 😊 Whenever you’re ready, tell me what you have in mind and I’ll help."
+
+    friendship = (
+        "be my friend" in normalized
+        or "will you be my friend" in normalized
+        or "can you be my friend" in normalized
+        or "are you my friend" in normalized
+    )
+    if friendship:
+        return "Of course 😊 I’d be happy to keep you company and help whenever you need me. What’s on your mind?"
+
+    if normalized in {"how are you", "how are you doing", "how r u"}:
+        return "I’m doing great and ready to help 😊 How are you doing?"
+
+    return None
+
+
 async def gemini_generate(
     prompt: str,
     system: Optional[str] = None,
@@ -131,6 +174,8 @@ async def gemini_generate(
     client = _get_client()
     if client is None:
         logger.error("Gemini unavailable: GEMINI_API_KEY is not configured")
+        if system and "You are 'Memo'" in system and not json_mode:
+            return _memo_local_fallback(prompt)
         return None
 
     requested = (model or os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")).strip()
@@ -171,4 +216,11 @@ async def gemini_generate(
                     await asyncio.sleep(1.2 * (attempt + 1))
                     continue
                 break
+
+    # If Gemini is down/overloaded, keep simple social conversation alive instead of
+    # dropping the customer into a sales-oriented WhatsApp error message.
+    if system and "You are 'Memo'" in system and not json_mode:
+        fallback_reply = _memo_local_fallback(prompt)
+        if fallback_reply:
+            return fallback_reply
     return None
