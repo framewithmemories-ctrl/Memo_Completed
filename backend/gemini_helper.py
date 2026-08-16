@@ -1,8 +1,8 @@
 """Reusable Google Gemini helper (uses the user's own GEMINI_API_KEY).
 
 Independent of Emergent's LLM proxy. The SDK calls are synchronous, so we run them
-in a thread to keep FastAPI endpoints non-blocking. Every function fails GRACEFULLY:
-if the key is missing/invalid/quota-exceeded, it returns None and callers fall back.
+in a thread to keep FastAPI endpoints non-blocking. Every function fails gracefully:
+if the key is missing/invalid/quota-exceeded, it returns None and callers can fall back.
 """
 import os
 import asyncio
@@ -37,15 +37,22 @@ async def gemini_generate(
     temperature: float = 0.7,
     model: Optional[str] = None,
 ) -> Optional[str]:
-    """Generate text with Gemini. Retries on transient errors and falls back to a
-    secondary model. Returns the text, or None on any failure (callers handle fallback).
-    Pass `model` to override the primary model for this call (e.g. a faster flash model)."""
+    """Generate text with Gemini using a stable primary/fallback model chain.
+
+    The caller may override the model, but Memo's normal chat path should use the
+    configured stable model rather than a rolling '*-latest' alias.
+    """
     client = _get_client()
     if client is None:
+        logger.error("Gemini unavailable: GEMINI_API_KEY is not configured")
         return None
+
     primary = (model or os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")).strip() or "gemini-2.5-flash"
     fallback = os.environ.get("GEMINI_FALLBACK_MODEL", "gemini-2.5-flash-lite").strip() or "gemini-2.5-flash-lite"
-    models = [primary] if primary == fallback else [primary, fallback]
+    models = []
+    for name in (primary, fallback, "gemini-2.5-flash"):
+        if name and name not in models:
+            models.append(name)
 
     def _call(model_name):
         from google.genai import types
@@ -54,9 +61,6 @@ async def gemini_generate(
             kwargs["system_instruction"] = system
         if json_mode:
             kwargs["response_mime_type"] = "application/json"
-        # Older Gemini 2.5 flash models "think" by default, consuming the max_output_tokens
-        # budget and truncating the answer, so disable thinking for those. Newer 3.x / *-latest
-        # flash models REJECT thinking_budget=0 (400 INVALID_ARGUMENT), so do NOT set it there.
         if "2.5" in model_name:
             kwargs["thinking_config"] = types.ThinkingConfig(thinking_budget=0)
         config = types.GenerateContentConfig(**kwargs)
@@ -72,9 +76,9 @@ async def gemini_generate(
             except Exception as e:
                 msg = str(e)
                 transient = any(code in msg for code in ("503", "429", "UNAVAILABLE", "RESOURCE_EXHAUSTED", "overloaded"))
-                logger.error(f"Gemini error (model={model_name}, attempt={attempt + 1}): {e}")
+                logger.error("Gemini error (model=%s, attempt=%s): %s", model_name, attempt + 1, e)
                 if transient and attempt < 2:
                     await asyncio.sleep(1.2 * (attempt + 1))
                     continue
-                break  # non-transient or out of attempts -> try next model
+                break
     return None
