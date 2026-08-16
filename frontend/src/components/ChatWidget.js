@@ -130,9 +130,10 @@ const scoreProduct = (p, text, context) => {
 const chooseCatalogueProducts = (products, userText, assistantText = '', context = {}) => {
   const safe = Array.isArray(products) ? products : [];
   if (!safe.length) return [];
+  if (isGreeting(userText) || isThanks(userText) || /^(help|what can you do|what do you do|how are you|how r u|how are u)[?!. ]*$/i.test(String(userText || '').trim())) return [];
   const combined = `${userText} ${assistantText}`.toLowerCase();
   const explicitProduct = safe.some(p => p.name && combined.includes(p.name.toLowerCase()));
-  const meaningful = explicitProduct || context.budget != null || /(birthday|anniversary|wedding|baby|valentine|mother|father|housewarming|farewell|retirement|graduation|christmas|pongal|diwali|frame|photo|mug|shirt|acrylic|wooden|led|corporate|gift|present|wife|husband|mother|father|friend|couple)/i.test(combined);
+  const meaningful = explicitProduct || context.budget != null || /(birthday|anniversary|wedding|baby|valentine|mother|father|housewarming|farewell|retirement|graduation|christmas|pongal|diwali|frame|photo|mug|shirt|acrylic|wooden|led|corporate|gift|present|wife|husband|mother|father|friend|couple)/i.test(String(userText || ''));
   if (!meaningful) return [];
   const scored = safe.map((p, index) => ({ p, score: scoreProduct(p, combined, context) - index * 0.001 }));
   const positive = scored.filter(x => x.score > 0).sort((a, b) => b.score - a.score);
