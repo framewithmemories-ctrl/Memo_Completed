@@ -117,7 +117,7 @@ toward the right Memories gift—not like an automated sales pitch.
 
 
 def _memo_local_fallback(prompt: str) -> Optional[str]:
-    """Small deterministic safety net for simple conversational turns.
+    """Deterministic safety net for simple conversational turns.
 
     This is intentionally limited to casual conversation. Gift/product requests still return
     None so the chat endpoint can use its existing WhatsApp fallback rather than inventing
@@ -126,7 +126,6 @@ def _memo_local_fallback(prompt: str) -> Optional[str]:
     if not prompt:
         return None
 
-    # Pull the latest customer message from the conversation payload.
     matches = re.findall(r"User:\s*(.*?)\s*(?=Assistant:|$)", prompt, flags=re.IGNORECASE | re.DOTALL)
     if not matches:
         return None
@@ -143,14 +142,22 @@ def _memo_local_fallback(prompt: str) -> Optional[str]:
     if normalized in {"ok", "okay", "okk", "great", "cool"}:
         return "Absolutely 😊 Whenever you’re ready, tell me what you have in mind and I’ll help."
 
-    friendship = (
-        "be my friend" in normalized
-        or "will you be my friend" in normalized
-        or "can you be my friend" in normalized
-        or "are you my friend" in normalized
-    )
+    friendship_phrases = {
+        "be my friend",
+        "will you be my friend",
+        "can you be my friend",
+        "are you my friend",
+        "shall we be friends",
+        "can we be friends",
+        "will we be friends",
+        "lets be friends",
+        "let s be friends",
+        "want to be friends",
+        "do you want to be friends",
+    }
+    friendship = normalized in friendship_phrases or "be friends" in normalized
     if friendship:
-        return "Of course 😊 I’d be happy to keep you company and help whenever you need me. What’s on your mind?"
+        return "Of course 😊 I’d be happy to be your friendly Memo! I’m always here to chat, help you choose a gift, or simply keep you company. What’s on your mind?"
 
     if normalized in {"how are you", "how are you doing", "how r u"}:
         return "I’m doing great and ready to help 😊 How are you doing?"
@@ -166,11 +173,7 @@ async def gemini_generate(
     temperature: float = 0.7,
     model: Optional[str] = None,
 ) -> Optional[str]:
-    """Generate text with Gemini using a stable primary/fallback model chain.
-
-    Rolling '*-latest' aliases are normalized to a known stable 2.5 Flash model
-    so a model alias change cannot silently break Memo's chat assistant.
-    """
+    """Generate text with Gemini using a stable primary/fallback model chain."""
     client = _get_client()
     if client is None:
         logger.error("Gemini unavailable: GEMINI_API_KEY is not configured")
@@ -217,8 +220,6 @@ async def gemini_generate(
                     continue
                 break
 
-    # If Gemini is down/overloaded, keep simple social conversation alive instead of
-    # dropping the customer into a sales-oriented WhatsApp error message.
     if system and "You are 'Memo'" in system and not json_mode:
         fallback_reply = _memo_local_fallback(prompt)
         if fallback_reply:
