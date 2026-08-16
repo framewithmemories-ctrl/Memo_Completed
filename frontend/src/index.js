@@ -1,30 +1,6 @@
 import React, { Component, lazy, Suspense } from "react";
 import ReactDOM from "react-dom/client";
-import axios from "axios";
 import "./index.css";
-
-// The storefront expects GET /api/products to resolve to an array. Some production
-// responses can be wrapped as { products: [...] } (or another object), which used to
-// reach ProductGrid unchanged and crash on `.filter()` with a white screen.
-// Normalize only the collection endpoint; never alter product-detail object responses.
-axios.interceptors.response.use((response) => {
-  try {
-    const requestUrl = response?.config?.url || "";
-    const pathname = new URL(requestUrl, window.location.origin).pathname;
-    if (pathname.endsWith("/api/products") && !Array.isArray(response.data)) {
-      const normalized = Array.isArray(response.data?.products)
-        ? response.data.products
-        : Array.isArray(response.data?.items)
-          ? response.data.items
-          : [];
-      console.warn("Memories: normalized unexpected /api/products response shape", response.data);
-      response.data = normalized;
-    }
-  } catch (error) {
-    console.warn("Memories: unable to normalize product response", error);
-  }
-  return response;
-});
 
 const App = lazy(() => import("./App"));
 
