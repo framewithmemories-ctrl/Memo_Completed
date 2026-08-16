@@ -68,12 +68,39 @@ const isThanks = (q) => /^(thanks|thank you|thank u|thx)[!. ]*$/i.test(q.trim())
 
 // Product cards are intentionally gated. Memo can talk naturally about gifts, occasions,
 // relationships and the shop without visually turning every conversation into a sales pitch.
+// This gate understands common Indian-language/Tanglish requests as well as English. It is
+// deliberately request-oriented: mentioning a birthday/gift alone does NOT display products.
 const isExplicitProductRequest = (text = '') => {
   const q = String(text).toLowerCase().replace(/\s+/g, ' ').trim();
   if (!q) return false;
-  const recommendation = /(recommend|recommendation|suggest|suggestion|what (should|can|could) i (buy|gift|get|give)|what do you recommend|gift ideas|gift idea|ideas for a gift|show me (some )?(gifts|gift options|products|options)|what gifts (do you|can you) (have|suggest)|which gift|which one should i|help me choose|help me pick|shortlist|best gift|best gifts|options under|gifts under|products under|show (me )?(some )?options)/i.test(q);
-  const directProduct = /(price|pricing|how much|cost|buy|purchase|order|add to cart|do you have|do you sell|available|in stock|tell me about|show me|details of|details about)\b.*\b(frame|mug|t-?shirt|acrylic|wooden|corporate|gift|product|watch|item)\b/i.test(q);
-  return recommendation || directProduct;
+
+  // English
+  const englishRecommendation = /(recommend|recommendation|suggest|suggestion|what (should|can|could) i (buy|gift|get|give)|what do you recommend|gift ideas?|ideas? for a gift|show me (some )?(gifts|gift options|products|options)|what gifts (do you|can you) (have|suggest)|which gift|which one should i|help me (choose|pick)|shortlist|best gifts?|options under|gifts under)/i.test(q);
+  const englishDirectProduct = /(price|pricing|how much|cost|buy|purchase|order|add to cart|do you have|do you sell|available|in stock|tell me about|show me|details? (of|about))\b.*\b(frame|mug|t-?shirt|acrylic|wooden|corporate|gift|product|watch|item)\b/i.test(q);
+
+  // Tamil + Tanglish. Examples: "என் மனைவிக்கு ஒரு பரிசு வேண்டும்", "gift suggest pannunga",
+  // "என்ன வாங்கலாம்", "options kaamikka mudiyuma".
+  const tamilRecommendation = /(பரிசு|gift|gifts?|present).*(வேண்டும்|வேணும்|சொல்லுங்கள்|சொல்லுங்க|பரிந்துரை|பரிந்துரைக்க|suggest|சஜெஸ்ட்|காட்டுங்கள்|காட்டுங்க|வாங்கலாம்|வாங்குவது|என்ன வாங்க|உதவி|options?|ideas?)/i.test(q)
+    || /(என்ன (வாங்க|பரிசு)|எது நல்ல|எந்த பரிசு|பரிசு (சொல்ல|காட்ட|வேண்டும்)|பரிந்துரை|காட்டுங்கள்|காட்டுங்க)/i.test(q)
+    || /(gift|present).*(venum|vEnum|venumaa|venuma|venum nga|venum boss|suggest pannunga|recommend pannunga|kaamikka|kaatung(a|al)|enna vangalam|edhu nalla|ethavathu gift)/i.test(q);
+
+  // Hindi
+  const hindiRecommendation = /(उपहार|तोहफा|गिफ्ट|gift).*(चाहिए|चाहिये|सुझाव|सुझाएं|सुझाओ|बताइए|बताओ|दिखाइए|दिखाओ|क्या खरीदूं|क्या लें|चुनने|विकल्प|आइडिया)/i.test(q)
+    || /(क्या (खरीदूं|लूं)|कौन सा (उपहार|गिफ्ट)|उपहार (बताइए|दिखाइए|चाहिए)|सुझाव)/i.test(q);
+
+  // Malayalam
+  const malayalamRecommendation = /(സമ്മാനം|ഗിഫ്റ്റ്|ഉപഹാരം).*(വേണം|വേണം|നിർദ്ദേശം|ശുപാർശ|പറയൂ|കാണിക്കൂ|എന്ത് വാങ്ങ|ഓപ്ഷൻ|ഐഡിയ)/i.test(q)
+    || /(എന്ത് വാങ്ങണം|ഏത് സമ്മാനം|ശുപാർശ|നിർദ്ദേശം|കാണിക്കൂ)/i.test(q);
+
+  // Telugu
+  const teluguRecommendation = /(బహుమతి|గిఫ్ట్|ఉపహారం).*(కావాలి|చెప్పండి|సూచించ|సజెస్ట్|చూపించ|ఏం కొన|ఆప్షన్|ఐడియా)/i.test(q)
+    || /(ఏం కొనాలి|ఏ బహుమతి|సూచించండి|చూపించండి)/i.test(q);
+
+  // Kannada
+  const kannadaRecommendation = /(ಉಡುಗೊರೆ|ಗಿಫ್ಟ್|ಉಪಹಾರ).*(ಬೇಕು|ಹೇಳಿ|ಸಲಹೆ|ಸೂಚಿಸಿ|ತೋರಿಸಿ|ಏನು ಕೊಳ್ಳ|ಆಯ್ಕೆ|ಐಡಿಯಾ)/i.test(q)
+    || /(ಏನು ಕೊಳ್ಳಲಿ|ಯಾವ ಉಡುಗೊರೆ|ಸಲಹೆ|ತೋರಿಸಿ)/i.test(q);
+
+  return englishRecommendation || englishDirectProduct || tamilRecommendation || hindiRecommendation || malayalamRecommendation || teluguRecommendation || kannadaRecommendation;
 };
 
 const getSmartLocalReply = async (text, api = API) => {
@@ -143,7 +170,7 @@ const chooseCatalogueProducts = (products, userText, assistantText = '', context
   if (!isExplicitProductRequest(userText)) return [];
   const combined = `${userText} ${assistantText}`.toLowerCase();
   const explicitProduct = safe.some(p => p.name && combined.includes(p.name.toLowerCase()));
-  const meaningful = explicitProduct || context.budget != null || /(birthday|anniversary|wedding|baby|valentine|mother|father|housewarming|farewell|retirement|graduation|christmas|pongal|diwali|frame|photo|mug|shirt|acrylic|wooden|led|corporate|gift|present|wife|husband|mother|father|friend|couple)/i.test(String(userText || ''));
+  const meaningful = explicitProduct || context.budget != null || /(birthday|anniversary|wedding|baby|valentine|mother|father|housewarming|farewell|retirement|graduation|christmas|pongal|diwali|frame|photo|mug|shirt|acrylic|wooden|led|corporate|gift|present|wife|husband|mother|father|friend|couple|பரிசு|பரிசுகள்|கிப்ட்|उपहार|गिफ्ट|സമ്മാനം|ഗിഫ്റ്റ്|బహుమతి|గిఫ్ట్|ಉಡುಗೊರೆ|ಗಿಫ್ಟ್)/i.test(String(userText || ''));
   if (!meaningful) return [];
   const scored = safe.map((p, index) => ({ p, score: scoreProduct(p, combined, context) - index * 0.001 }));
   const positive = scored.filter(x => x.score > 0).sort((a, b) => b.score - a.score);
