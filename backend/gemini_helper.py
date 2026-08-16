@@ -39,15 +39,18 @@ async def gemini_generate(
 ) -> Optional[str]:
     """Generate text with Gemini using a stable primary/fallback model chain.
 
-    The caller may override the model, but Memo's normal chat path should use the
-    configured stable model rather than a rolling '*-latest' alias.
+    Rolling '*-latest' aliases are normalized to a known stable 2.5 Flash model
+    so a model alias change cannot silently break Memo's chat assistant.
     """
     client = _get_client()
     if client is None:
         logger.error("Gemini unavailable: GEMINI_API_KEY is not configured")
         return None
 
-    primary = (model or os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")).strip() or "gemini-2.5-flash"
+    requested = (model or os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")).strip()
+    if requested.endswith("-latest"):
+        requested = "gemini-2.5-flash"
+    primary = requested or "gemini-2.5-flash"
     fallback = os.environ.get("GEMINI_FALLBACK_MODEL", "gemini-2.5-flash-lite").strip() or "gemini-2.5-flash-lite"
     models = []
     for name in (primary, fallback, "gemini-2.5-flash"):
