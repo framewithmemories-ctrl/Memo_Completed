@@ -1,14 +1,16 @@
-"""Reusable Google Gemini helper (uses the user's own GEMINI_API_KEY).
+"""Memo AI provider layer.
 
-Independent of Emergent's LLM proxy. The SDK calls are synchronous, so we run them
-in a thread to keep FastAPI endpoints non-blocking. Every function fails gracefully:
-if the key is missing/invalid/quota-exceeded, it returns None and callers can fall back.
+Gemini remains the primary provider. When Gemini is unavailable, Memo can transparently
+fail over to Groq and then OpenRouter. Provider API keys are server-side environment
+variables only. A small local conversational fallback remains the final safety net.
 """
 import os
 import asyncio
 import logging
 import re
 from typing import Optional
+
+import httpx
 
 logger = logging.getLogger(__name__)
 
@@ -31,101 +33,78 @@ def _get_client():
 
 
 def _enhance_memo_system(system: Optional[str]) -> Optional[str]:
-    """Strengthen Memo's conversational behaviour without changing the API contract.
-
-    The chat endpoint supplies the business/catalog grounding. This layer makes sure
-    Memo behaves like a genuine gift advisor: conversation first, discovery second,
-    recommendations when useful, and never a product dump for casual messages.
-    """
+    """Strengthen Memo's conversational behaviour without changing the API contract."""
     if not system or "You are 'Memo'" not in system:
         return system
 
     memo_behavior = r'''
 
-MEMO CONVERSATION & GIFT-ASSISTANT RULES:
-You are not a catalogue search box and you are not a pushy salesperson. You are Memo,
-a warm, natural, thoughtful gift advisor for Memories. Your primary job is to help the
-customer discover a suitable gift from the Memories collection while having a real,
-useful conversation.
+MEMO INTELLIGENCE RULES:
+You are Memo, the intelligent and warm digital gift advisor for Memories. You are not a
+catalogue search box, a pushy salesperson, or a keyword-matching autoresponder.
 
-1. CONVERSE NATURALLY FIRST.
-- Respond naturally to greetings, thanks, small talk, uncertainty, and general questions.
-- For messages such as "hi", "hello", "thanks", "okay", or "how are you", do NOT immediately
-  show products or start selling. Have a short friendly exchange and gently offer help.
-- Do not repeat the same canned introduction on every turn.
-- Avoid sounding like a scripted chatbot or advertisement.
+CONVERSATION FIRST
+- Understand the meaning and context of the customer's message, not just exact words.
+- Respond naturally to greetings, small talk, questions about you, uncertainty, emotions,
+and ordinary conversation. Do not force every conversation back to products.
+- You may be warm, playful and companionable, but never falsely claim to be a human or a
+real-world romantic partner. If asked about friendship, love, dating or marriage, respond
+naturally and honestly as an AI companion/assistant without becoming cold or repetitive.
+- Do not use canned replies merely because a keyword appeared. Infer intent from the whole
+conversation and the customer's latest message.
 
-2. DISCOVER THE GIFT CONTEXT.
-When the customer appears to want a gift, gradually understand what matters:
-- who the gift is for / relationship
-- occasion or reason
-- approximate budget
-- interests, style, or preferences when relevant
-- whether they want something personalised, photo-based, decorative, useful, etc.
-Do not interrogate the customer with a long questionnaire. Ask only the next most useful
-question, and skip anything the customer has already told you.
+CONTEXT & MEMORY
+- Use the supplied conversation history. Remember recipient, relationship, occasion, budget,
+preferences and corrections the customer has already provided.
+- If the customer changes the recipient or requirement, update the context rather than
+continuing with stale assumptions.
+- Ask only the next most useful question; do not repeat information already known.
 
-3. REMEMBER THE CONVERSATION.
-Use the supplied conversation history. If the customer already said "my wife", "birthday",
-"under Rs.1000", etc., remember it and do not ask again unless clarification is needed.
-Use later messages to refine the recommendation.
+GIFT ADVISOR
+- When genuine gift intent exists, guide the customer toward a suitable Memories gift.
+- Consider recipient, occasion, budget, personalization, emotional value and preferences.
+- Recommend only products/services supported by the supplied Memories catalogue and business
+information. Never invent products, prices, discounts, stock, delivery promises or policies.
+- Do not recommend outside sellers, marketplaces or competing products.
 
-4. RECOMMENDATIONS ARE THE PURPOSE, NOT THE OPENING MOVE.
-Once enough context is available, proactively suggest suitable Memories products and explain
-briefly why they fit the recipient, occasion, and budget. If the customer asks directly for
-recommendations, you may recommend immediately without asking unnecessary questions.
-Only recommend products that exist in the supplied Memories catalogue. Never invent a
-product, price, discount, feature, availability, or service.
+PRODUCT DISPLAY INTENT
+- A conversational response does NOT automatically mean products should be displayed.
+- Greetings, friendship, emotions, general Memories questions, business questions, safety
+questions and ordinary small talk should remain conversation unless the customer also clearly
+asks for a gift/product recommendation.
+- If the frontend has a separate recommendation gate, its decision is authoritative.
 
-5. DO NOT SHOW PRODUCT CARDS FOR CASUAL CHAT.
-A greeting or general conversation should receive a conversational answer without a product
-list. Product cards are handled by the frontend when appropriate; your text should make the
-conversation useful rather than dumping the catalogue.
+MEMORIES KNOWLEDGE
+- Answer Memories-specific questions from the supplied business/catalogue context.
+- If information is unavailable, say so honestly rather than guessing.
+- Never expose private credentials, API keys, internal implementation details or confidential
+business data.
 
-6. KEEP THE CUSTOMER WITH MEMORIES.
-Do not recommend outside sellers, marketplaces, or competing products. If Memories does not
-have an exact requested item, explain that briefly and suggest the closest suitable Memories
-option or invite the customer to contact the shop for a custom solution.
+SAFETY & BOUNDARIES
+- Do not assist with harming people or other dangerous wrongdoing. Do not turn a safety-
+sensitive conversation into a product recommendation.
+- For health or other high-stakes questions, give only general cautious information and
+encourage appropriate professional help when warranted.
 
-7. BE A GIFT EXPERT.
-Give practical reasoning: personalization, emotional value, recipient relationship, occasion,
-budget, photo suitability, and customization possibilities when those are supported by the
-catalogue. Help an indecisive customer compare options rather than simply listing products.
+STYLE
+- Usually 2-5 concise sentences for normal conversation.
+- Warm, intelligent, specific and human-sounding without pretending to be human.
+- Use light emojis naturally, not in every sentence.
+- Plain text only; no markdown headings, tables or asterisks unless the caller explicitly
+needs formatting.
 
-8. NATURAL CONVERSATION EXAMPLES.
-If the customer says "I'm confused what to give my wife", respond with empathy and ask one
-useful question such as the occasion or budget.
-If they say "birthday", ask who it is for or, if that is already known, ask the next useful
-thing such as budget or personalization preference.
-If they say "birthday for my wife under Rs.1000", acknowledge all three facts and move toward
-a relevant shortlist without asking them to repeat anything.
-If they say "what about something with a photo?", retain the existing recipient, occasion and
-budget context and answer from that context.
-
-9. RESPONSE STYLE.
-- Usually 2-5 short sentences for normal conversation.
-- Be warm, concise, specific and human.
-- Use light emojis naturally, but do not overuse them.
-- Plain text only; no markdown headings, tables, or asterisks.
-- Never claim to have performed an action that you did not perform.
-
-10. PRIMARY SUCCESS CRITERION.
-A successful Memo interaction should feel like a helpful conversation that leads the customer
-toward the right Memories gift—not like an automated sales pitch.
+PRIMARY SUCCESS CRITERION
+A successful Memo interaction feels like a thoughtful conversation that can naturally become
+a Memories gift consultation when appropriate. It should never feel like an automated
+WhatsApp sales message.
 '''
     return f"{system}{memo_behavior}"
 
 
 def _memo_local_fallback(prompt: str) -> Optional[str]:
-    """Deterministic safety net for simple conversational turns.
-
-    This is intentionally limited to casual conversation. Gift/product requests still return
-    None so the chat endpoint can use its existing WhatsApp fallback rather than inventing
-    product information when Gemini is unavailable.
-    """
+    """Final deterministic safety net for common conversational turns only."""
     if not prompt:
         return None
-
     matches = re.findall(r"User:\s*(.*?)\s*(?=Assistant:|$)", prompt, flags=re.IGNORECASE | re.DOTALL)
     if not matches:
         return None
@@ -135,34 +114,119 @@ def _memo_local_fallback(prompt: str) -> Optional[str]:
     greetings = {"hi", "hello", "hey", "hii", "hiii", "good morning", "good afternoon", "good evening"}
     if normalized in greetings:
         return "Hi! 😊 I’m Memo from Memories. Nice to meet you! What can I help you with today?"
-
     if normalized in {"thanks", "thank you", "thx", "thanks memo", "thank you memo"}:
         return "You’re very welcome! 😊 I’m here whenever you need me."
-
     if normalized in {"ok", "okay", "okk", "great", "cool"}:
         return "Absolutely 😊 Whenever you’re ready, tell me what you have in mind and I’ll help."
 
-    friendship_phrases = {
-        "be my friend",
-        "will you be my friend",
-        "can you be my friend",
-        "are you my friend",
-        "shall we be friends",
-        "can we be friends",
-        "will we be friends",
-        "lets be friends",
-        "let s be friends",
-        "want to be friends",
-        "do you want to be friends",
-    }
-    friendship = normalized in friendship_phrases or "be friends" in normalized
+    friendship = (
+        "be friends" in normalized
+        or "be my friend" in normalized
+        or "friends with me" in normalized
+        or "want to be friends" in normalized
+        or "do you want to be friends" in normalized
+    )
     if friendship:
-        return "Of course 😊 I’d be happy to be your friendly Memo! I’m always here to chat, help you choose a gift, or simply keep you company. What’s on your mind?"
+        return "Of course 😊 I’d be happy to be your friendly Memo. I’m always here to chat, keep you company, or help you find a thoughtful gift. What’s on your mind?"
+
+    relationship = any(phrase in normalized for phrase in (
+        "be my wife", "be my husband", "be my girlfriend", "be my boyfriend",
+        "marry me", "will you marry", "love me", "are you in love",
+    ))
+    if relationship:
+        return "Aww, that’s sweet 😊 I’m Memo, your digital companion at Memories, so I can’t be a real-life partner. But I’m always happy to chat with you and be your helpful gift companion."
 
     if normalized in {"how are you", "how are you doing", "how r u"}:
         return "I’m doing great and ready to help 😊 How are you doing?"
-
     return None
+
+
+async def _openai_compatible_generate(
+    *,
+    api_key: str,
+    base_url: str,
+    model: str,
+    prompt: str,
+    system: Optional[str],
+    json_mode: bool,
+    max_tokens: int,
+    temperature: float,
+    provider: str,
+) -> Optional[str]:
+    """Call an OpenAI-compatible provider without adding another SDK dependency."""
+    if not api_key:
+        return None
+
+    messages = []
+    effective_system = _enhance_memo_system(system)
+    if effective_system:
+        messages.append({"role": "system", "content": effective_system})
+    messages.append({"role": "user", "content": prompt})
+
+    payload = {
+        "model": model,
+        "messages": messages,
+        "temperature": temperature,
+        "max_tokens": max_tokens,
+    }
+    if json_mode:
+        payload["response_format"] = {"type": "json_object"}
+
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+    if provider == "openrouter":
+        headers["HTTP-Referer"] = os.environ.get("MEMO_SITE_URL", "https://memoriesngifts.com")
+        headers["X-Title"] = "Memories Memo"
+
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(20.0, connect=8.0)) as client:
+            response = await client.post(f"{base_url.rstrip('/')}/chat/completions", headers=headers, json=payload)
+            if response.status_code >= 400:
+                logger.error("%s provider error %s: %s", provider, response.status_code, response.text[:500])
+                return None
+            data = response.json()
+            choices = data.get("choices") or []
+            if not choices:
+                logger.error("%s provider returned no choices", provider)
+                return None
+            message = choices[0].get("message") or {}
+            text = message.get("content")
+            if isinstance(text, list):
+                text = "".join(part.get("text", "") for part in text if isinstance(part, dict))
+            return (text or "").strip() or None
+    except Exception as exc:
+        logger.error("%s provider request failed: %s", provider, exc)
+        return None
+
+
+async def _groq_generate(prompt, system, json_mode, max_tokens, temperature):
+    return await _openai_compatible_generate(
+        api_key=os.environ.get("GROQ_API_KEY", "").strip(),
+        base_url=os.environ.get("GROQ_BASE_URL", "https://api.groq.com/openai/v1"),
+        model=os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile"),
+        prompt=prompt,
+        system=system,
+        json_mode=json_mode,
+        max_tokens=max_tokens,
+        temperature=temperature,
+        provider="groq",
+    )
+
+
+async def _openrouter_generate(prompt, system, json_mode, max_tokens, temperature):
+    return await _openai_compatible_generate(
+        api_key=os.environ.get("OPENROUTER_API_KEY", "").strip(),
+        base_url=os.environ.get("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"),
+        model=os.environ.get("OPENROUTER_MODEL", "openrouter/free"),
+        prompt=prompt,
+        system=system,
+        json_mode=json_mode,
+        max_tokens=max_tokens,
+        temperature=temperature,
+        provider="openrouter",
+    )
 
 
 async def gemini_generate(
@@ -173,52 +237,62 @@ async def gemini_generate(
     temperature: float = 0.7,
     model: Optional[str] = None,
 ) -> Optional[str]:
-    """Generate text with Gemini using a stable primary/fallback model chain."""
+    """Generate Memo text with Gemini first, then Groq, then OpenRouter, then local fallback."""
     client = _get_client()
-    if client is None:
+    if client is not None:
+        requested = (model or os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")).strip()
+        if requested.endswith("-latest"):
+            requested = "gemini-2.5-flash"
+        primary = requested or "gemini-2.5-flash"
+        fallback = os.environ.get("GEMINI_FALLBACK_MODEL", "gemini-2.5-flash-lite").strip() or "gemini-2.5-flash-lite"
+        models = []
+        for name in (primary, fallback, "gemini-2.5-flash"):
+            if name and name not in models:
+                models.append(name)
+
+        def _call(model_name):
+            from google.genai import types
+            kwargs = {"temperature": temperature, "max_output_tokens": max_tokens}
+            effective_system = _enhance_memo_system(system)
+            if effective_system:
+                kwargs["system_instruction"] = effective_system
+            if json_mode:
+                kwargs["response_mime_type"] = "application/json"
+            if "2.5" in model_name:
+                kwargs["thinking_config"] = types.ThinkingConfig(thinking_budget=0)
+            config = types.GenerateContentConfig(**kwargs)
+            resp = client.models.generate_content(model=model_name, contents=prompt, config=config)
+            return (resp.text or "").strip()
+
+        for model_name in models:
+            for attempt in range(2):
+                try:
+                    text = await asyncio.to_thread(_call, model_name)
+                    if text:
+                        return text
+                except Exception as e:
+                    msg = str(e)
+                    transient = any(code in msg for code in ("503", "429", "UNAVAILABLE", "RESOURCE_EXHAUSTED", "overloaded"))
+                    logger.error("Gemini error (model=%s, attempt=%s): %s", model_name, attempt + 1, e)
+                    if transient and attempt < 1:
+                        await asyncio.sleep(1.0)
+                        continue
+                    break
+    else:
         logger.error("Gemini unavailable: GEMINI_API_KEY is not configured")
-        if system and "You are 'Memo'" in system and not json_mode:
-            return _memo_local_fallback(prompt)
-        return None
 
-    requested = (model or os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")).strip()
-    if requested.endswith("-latest"):
-        requested = "gemini-2.5-flash"
-    primary = requested or "gemini-2.5-flash"
-    fallback = os.environ.get("GEMINI_FALLBACK_MODEL", "gemini-2.5-flash-lite").strip() or "gemini-2.5-flash-lite"
-    models = []
-    for name in (primary, fallback, "gemini-2.5-flash"):
-        if name and name not in models:
-            models.append(name)
+    # Provider failover is intentionally server-side and transparent to the customer.
+    if os.environ.get("GROQ_API_KEY", "").strip():
+        text = await _groq_generate(prompt, system, json_mode, max_tokens, temperature)
+        if text:
+            logger.info("Memo response served by Groq fallback")
+            return text
 
-    def _call(model_name):
-        from google.genai import types
-        kwargs = {"temperature": temperature, "max_output_tokens": max_tokens}
-        effective_system = _enhance_memo_system(system)
-        if effective_system:
-            kwargs["system_instruction"] = effective_system
-        if json_mode:
-            kwargs["response_mime_type"] = "application/json"
-        if "2.5" in model_name:
-            kwargs["thinking_config"] = types.ThinkingConfig(thinking_budget=0)
-        config = types.GenerateContentConfig(**kwargs)
-        resp = client.models.generate_content(model=model_name, contents=prompt, config=config)
-        return (resp.text or "").strip()
-
-    for model_name in models:
-        for attempt in range(3):
-            try:
-                text = await asyncio.to_thread(_call, model_name)
-                if text:
-                    return text
-            except Exception as e:
-                msg = str(e)
-                transient = any(code in msg for code in ("503", "429", "UNAVAILABLE", "RESOURCE_EXHAUSTED", "overloaded"))
-                logger.error("Gemini error (model=%s, attempt=%s): %s", model_name, attempt + 1, e)
-                if transient and attempt < 2:
-                    await asyncio.sleep(1.2 * (attempt + 1))
-                    continue
-                break
+    if os.environ.get("OPENROUTER_API_KEY", "").strip():
+        text = await _openrouter_generate(prompt, system, json_mode, max_tokens, temperature)
+        if text:
+            logger.info("Memo response served by OpenRouter fallback")
+            return text
 
     if system and "You are 'Memo'" in system and not json_mode:
         fallback_reply = _memo_local_fallback(prompt)
