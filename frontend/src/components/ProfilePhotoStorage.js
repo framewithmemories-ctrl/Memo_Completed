@@ -4,6 +4,7 @@ import { Button } from "./ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "./ui/card";
 import { Badge } from "./ui/badge";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "./ui/dialog";
+import { Input } from "./ui/input";
 import { toast } from "sonner";
 import { Camera, Image as ImageIcon, Trash2, Download, Eye, Upload, Star, Heart, X, Plus, Grid, List, Search, Filter } from "lucide-react";
 
