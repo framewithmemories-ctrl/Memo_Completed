@@ -28,7 +28,7 @@ const WELCOME = {
 
 const parseBudget = (text) => {
   const matches = [...String(text || '').matchAll(/(?:₹|rs\.?\s*|inr\s*)([0-9]+(?:,[0-9]{3})*(?:\.[0-9]+)?)/gi)];
-  const values = matches.map(m => Number(m[1].replace(/,/g, '')).filter(Number.isFinite);
+  const values = matches.map(m => Number(m[1].replace(/,/g, ''))).filter(Number.isFinite);
   return values.length ? Math.max(...values) : null;
 };
 
@@ -140,7 +140,6 @@ const scoreProduct = (p, text, context) => {
 const chooseCatalogueProducts = (products, userText, assistantText = '', context = {}) => {
   const safe = Array.isArray(products) ? products : [];
   if (!safe.length) return [];
-  // Hard gate: no product cards until the customer explicitly asks to see/recommend/buy a gift/product.
   if (!isExplicitProductRequest(userText)) return [];
   const combined = `${userText} ${assistantText}`.toLowerCase();
   const explicitProduct = safe.some(p => p.name && combined.includes(p.name.toLowerCase()));
