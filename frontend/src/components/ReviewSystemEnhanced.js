@@ -7,9 +7,11 @@ import { Star, ExternalLink, MapPin, Loader2 } from "lucide-react";
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
 const API = `${BACKEND_URL}/api`;
 
-// This is the public Google Business Profile review-writing URL supplied by Memories.
+// Verified Google Business Profile Place ID for Memories Frames & Gift Shop.
+// This prevents the "Read all on Google" button from opening a generic search page.
+const GOOGLE_PLACE_ID = 'ChIJ9dQb1b33qDsRTLJ9I1nkuqo';
 const GOOGLE_WRITE_REVIEW_URL = 'https://g.page/r/CUyyfSNZ5LqqEAE/review';
-const GOOGLE_BUSINESS_URL = 'https://www.google.com/maps/search/?api=1&query=Memories%20Photo%20Frames%20Coimbatore';
+const GOOGLE_REVIEWS_URL = `https://search.google.com/local/reviews?placeid=${GOOGLE_PLACE_ID}`;
 
 const safeNumber = (value, fallback = 0) => {
   const n = Number(value);
@@ -50,13 +52,13 @@ export const ReviewSystemEnhanced = () => {
     return () => { cancelled = true; };
   }, []);
 
-  // IMPORTANT: never render reviews, ratings, counts or names unless the backend
-  // explicitly confirms that the data came from Google.
+  // Never render names, review text, rating or review count unless the backend
+  // explicitly confirms that the values came from Google.
   const isConfigured = googleData?.configured === true;
   const reviews = isConfigured && Array.isArray(googleData?.reviews) ? googleData.reviews : [];
   const rating = isConfigured ? safeNumber(googleData?.rating) : 0;
   const total = isConfigured ? Math.max(0, Math.floor(safeNumber(googleData?.total))) : 0;
-  const googleUrl = isConfigured && googleData?.google_url ? googleData.google_url : GOOGLE_BUSINESS_URL;
+  const googleUrl = isConfigured && googleData?.google_url ? googleData.google_url : GOOGLE_REVIEWS_URL;
 
   return (
     <section className="bg-white rounded-2xl shadow-lg border border-gray-200 p-6 md:p-8" data-testid="google-review-system">
@@ -104,7 +106,7 @@ export const ReviewSystemEnhanced = () => {
       ) : !isConfigured ? (
         <div className="rounded-xl border border-amber-200 bg-amber-50 p-5 text-center">
           <p className="font-semibold text-gray-900 mb-1">Google reviews are temporarily unavailable here.</p>
-          <p className="text-sm text-gray-600 mb-4">You can still read our genuine Google reviews or leave your own review directly on Google.</p>
+          <p className="text-sm text-gray-600 mb-4">We will never show sample or invented reviews. You can read the genuine reviews directly on your Google Business Profile.</p>
           <div className="flex flex-wrap justify-center gap-3">
             <Button
               type="button"
@@ -117,7 +119,7 @@ export const ReviewSystemEnhanced = () => {
               type="button"
               variant="outline"
               className="border-gray-300 text-gray-800 hover:bg-gray-100 hover:text-gray-900"
-              onClick={() => window.open(GOOGLE_BUSINESS_URL, '_blank', 'noopener,noreferrer')}
+              onClick={() => window.open(GOOGLE_REVIEWS_URL, '_blank', 'noopener,noreferrer')}
             >
               Read Google Reviews
             </Button>
