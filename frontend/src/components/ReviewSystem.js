@@ -1,554 +1,88 @@
-import React, { useState, useEffect } from 'react';
-import { Button } from "./ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "./ui/card";
-import { Badge } from "./ui/badge";
-import { Input } from "./ui/input";
-import { Label } from "./ui/label";
-import { Textarea } from "./ui/textarea";
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "./ui/dialog";
-import { toast } from "sonner";
+import React, { useEffect, useState } from 'react';
 import axios from 'axios';
-import { 
-  Star, 
-  ThumbsUp, 
-  Quote, 
-  User, 
-  Calendar, 
-  Camera, 
-  Send,
-  CheckCircle,
-  Heart,
-  MapPin,
-  ExternalLink
-} from "lucide-react";
+import { Button } from "./ui/button";
+import { Card, CardContent } from "./ui/card";
+import { Star, ExternalLink, MapPin, Loader2 } from "lucide-react";
 
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
 const API = `${BACKEND_URL}/api`;
+const GOOGLE_WRITE_REVIEW_URL = 'https://g.page/r/CUyyfSNZ5LqqEAE/review';
+const GOOGLE_BUSINESS_URL = 'https://www.google.com/maps/search/?api=1&query=Memories%20Photo%20Frames%20Coimbatore';
 
-// Star Rating Component
-const StarRating = ({ rating, onRatingChange, readonly = false, size = "w-5 h-5" }) => {
-  const [hoveredRating, setHoveredRating] = useState(0);
-  
-  return (
-    <div className="flex items-center space-x-1">
-      {[1, 2, 3, 4, 5].map((star) => (
-        <button
-          key={star}
-          type="button"
-          disabled={readonly}
-          className={`${readonly ? 'cursor-default' : 'cursor-pointer hover:scale-110'} transition-transform`}
-          onMouseEnter={() => !readonly && setHoveredRating(star)}
-          onMouseLeave={() => !readonly && setHoveredRating(0)}
-          onClick={() => !readonly && onRatingChange?.(star)}
-        >
-          <Star
-            className={`${size} ${
-              star <= (hoveredRating || rating)
-                ? 'fill-yellow-400 text-yellow-400'
-                : 'text-gray-300'
-            } transition-colors`}
-          />
-        </button>
-      ))}
-    </div>
-  );
-};
+const stars = (rating) => (
+  <div className="flex items-center gap-0.5">
+    {[1,2,3,4,5].map((star) => (
+      <Star key={star} className={`w-4 h-4 ${star <= Math.round(Number(rating) || 0) ? 'fill-yellow-400 text-yellow-400' : 'text-gray-300'}`} />
+    ))}
+  </div>
+);
 
-// Review Card Component
-const ReviewCard = ({ review }) => {
-  return (
-    <Card className="hover:shadow-lg transition-all duration-300 border-green-100">
-      <CardContent className="p-6">
-        <div className="flex items-start space-x-4">
-          {/* User Avatar */}
-          <div className="w-12 h-12 bg-gradient-to-br from-rose-500 to-pink-500 rounded-full flex items-center justify-center text-white font-bold text-lg flex-shrink-0">
-            {review.customerName.charAt(0).toUpperCase()}
-          </div>
-          
-          <div className="flex-1 space-y-3">
-            {/* Header */}
-            <div className="flex items-start justify-between">
-              <div>
-                <h4 className="font-semibold text-gray-900">{review.customerName}</h4>
-                <div className="flex items-center space-x-2 text-sm text-gray-600">
-                  <MapPin className="w-3 h-3" />
-                  <span>{review.location || 'Coimbatore'}</span>
-                  <span>•</span>
-                  <Calendar className="w-3 h-3" />
-                  <span>{new Date(review.createdAt).toLocaleDateString()}</span>
-                </div>
-              </div>
-              <Badge variant="secondary" className="bg-blue-100 text-blue-800">
-                {review.productName}
-              </Badge>
-            </div>
-            
-            {/* Rating */}
-            <div className="flex items-center space-x-3">
-              <StarRating rating={review.rating} readonly={true} />
-              <span className="text-sm font-medium text-gray-700">{review.rating}/5 stars</span>
-            </div>
-            
-            {/* Review Text */}
-            <blockquote className="text-gray-700 leading-relaxed">
-              <Quote className="w-4 h-4 text-gray-400 inline mr-2" />
-              {review.reviewText}
-            </blockquote>
-            
-            {/* Review Photo */}
-            {review.photoUrl && (
-              <div className="mt-3">
-                <img 
-                  src={review.photoUrl} 
-                  alt="Customer review photo"
-                  className="w-32 h-32 object-cover rounded-lg shadow-sm"
-                />
-              </div>
-            )}
-            
-            {/* Helpful Button */}
-            <div className="flex items-center space-x-4 pt-2">
-              <Button 
-                variant="ghost" 
-                size="sm"
-                className="text-gray-600 hover:text-green-600"
-              >
-                <ThumbsUp className="w-4 h-4 mr-1" />
-                Helpful ({review.helpfulCount || 0})
-              </Button>
-              {review.verified && (
-                <Badge className="bg-green-100 text-green-800">
-                  <CheckCircle className="w-3 h-3 mr-1" />
-                  Verified Purchase
-                </Badge>
-              )}
-            </div>
-          </div>
-        </div>
-      </CardContent>
-    </Card>
-  );
-};
-
-// Write Review Form Component
-const WriteReviewForm = ({ onSubmit, onCancel }) => {
-  const [formData, setFormData] = useState({
-    customerName: '',
-    email: '',
-    location: '',
-    productName: '',
-    rating: 0,
-    reviewText: '',
-    photoFile: null
-  });
-  const [isSubmitting, setIsSubmitting] = useState(false);
-
-  // Load user data if available
-  useEffect(() => {
-    const savedUser = localStorage.getItem('memoriesUser');
-    if (savedUser) {
-      try {
-        const user = JSON.parse(savedUser);
-        setFormData(prev => ({
-          ...prev,
-          customerName: user.name || '',
-          email: user.email || '',
-          location: 'Coimbatore'
-        }));
-      } catch (error) {
-        console.error('Error loading user data:', error);
-      }
-    }
-  }, []);
-
-  const handleInputChange = (field, value) => {
-    setFormData(prev => ({
-      ...prev,
-      [field]: value
-    }));
-  };
-
-  const handlePhotoUpload = (event) => {
-    const file = event.target.files[0];
-    if (file && file.size <= 5 * 1024 * 1024) { // 5MB limit
-      setFormData(prev => ({
-        ...prev,
-        photoFile: file
-      }));
-    } else {
-      toast.error('Photo must be smaller than 5MB');
-    }
-  };
-
-  const handleSubmit = async (e) => {
-    e.preventDefault();
-    
-    if (!formData.customerName || !formData.rating || !formData.reviewText) {
-      toast.error('Please fill in all required fields');
-      return;
-    }
-
-    setIsSubmitting(true);
-    
-    try {
-      const reviewData = {
-        ...formData,
-        createdAt: new Date().toISOString(),
-        verified: false, // Will be verified by admin
-        helpfulCount: 0,
-        status: 'pending' // Pending admin approval
-      };
-
-      // If photo is uploaded, convert to base64 (in production, upload to cloud storage)
-      if (formData.photoFile) {
-        const reader = new FileReader();
-        reader.onload = () => {
-          reviewData.photoUrl = reader.result;
-          submitReview(reviewData);
-        };
-        reader.readAsDataURL(formData.photoFile);
-      } else {
-        await submitReview(reviewData);
-      }
-      
-    } catch (error) {
-      console.error('Review submission error:', error);
-      toast.error('Failed to submit review. Please try again.');
-    } finally {
-      setIsSubmitting(false);
-    }
-  };
-
-  const submitReview = async (reviewData) => {
-    try {
-      // Try to submit to backend
-      const response = await axios.post(`${API}/reviews`, reviewData);
-      
-      if (response.data.success) {
-        toast.success('Review submitted successfully! It will be published after admin approval. 🎉');
-        onSubmit?.(reviewData);
-      }
-    } catch (error) {
-      // Fallback: Save to localStorage
-      const reviews = JSON.parse(localStorage.getItem('memoriesReviews') || '[]');
-      reviews.push({ ...reviewData, id: Date.now() });
-      localStorage.setItem('memoriesReviews', JSON.stringify(reviews));
-      
-      toast.success('Review submitted successfully! It will be published after admin approval. 🎉');
-      onSubmit?.(reviewData);
-    }
-  };
-
-  return (
-    <Card className="w-full max-w-2xl mx-auto">
-      <CardHeader>
-        <CardTitle className="flex items-center">
-          <Star className="w-5 h-5 mr-2 text-yellow-500" />
-          Write a Review
-        </CardTitle>
-        <CardDescription>
-          Share your experience with our products and help other customers make informed decisions
-        </CardDescription>
-      </CardHeader>
-      <CardContent>
-        <form onSubmit={handleSubmit} className="space-y-6">
-          {/* Customer Details */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div>
-              <Label htmlFor="customerName">Your Name *</Label>
-              <Input
-                id="customerName"
-                value={formData.customerName}
-                onChange={(e) => handleInputChange('customerName', e.target.value)}
-                placeholder="Enter your full name"
-                className="mt-1"
-              />
-            </div>
-            <div>
-              <Label htmlFor="email">Email Address</Label>
-              <Input
-                id="email"
-                type="email"
-                value={formData.email}
-                onChange={(e) => handleInputChange('email', e.target.value)}
-                placeholder="your.email@example.com"
-                className="mt-1"
-              />
-            </div>
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div>
-              <Label htmlFor="location">Location</Label>
-              <Input
-                id="location"
-                value={formData.location}
-                onChange={(e) => handleInputChange('location', e.target.value)}
-                placeholder="Your city"
-                className="mt-1"
-              />
-            </div>
-            <div>
-              <Label htmlFor="productName">Product Purchased</Label>
-              <Input
-                id="productName"
-                value={formData.productName}
-                onChange={(e) => handleInputChange('productName', e.target.value)}
-                placeholder="e.g., Custom Photo Frame"
-                className="mt-1"
-              />
-            </div>
-          </div>
-
-          {/* Rating */}
-          <div>
-            <Label>Your Rating *</Label>
-            <div className="flex items-center space-x-3 mt-2">
-              <StarRating 
-                rating={formData.rating} 
-                onRatingChange={(rating) => handleInputChange('rating', rating)}
-                size="w-8 h-8"
-              />
-              <span className="text-lg font-medium text-gray-700">
-                {formData.rating > 0 && `${formData.rating}/5 stars`}
-              </span>
-            </div>
-          </div>
-
-          {/* Review Text */}
-          <div>
-            <Label htmlFor="reviewText">Your Review *</Label>
-            <Textarea
-              id="reviewText"
-              value={formData.reviewText}
-              onChange={(e) => handleInputChange('reviewText', e.target.value)}
-              placeholder="Tell us about your experience with our product and service..."
-              className="mt-1 h-32"
-            />
-          </div>
-
-          {/* Photo Upload */}
-          <div>
-            <Label htmlFor="photo">Add a Photo (Optional)</Label>
-            <div className="mt-2">
-              <input
-                id="photo"
-                type="file"
-                accept="image/*"
-                onChange={handlePhotoUpload}
-                className="hidden"
-              />
-              <Button
-                type="button"
-                variant="outline"
-                onClick={() => document.getElementById('photo').click()}
-                className="border-dashed border-2 border-gray-300 hover:border-rose-300"
-              >
-                <Camera className="w-4 h-4 mr-2" />
-                {formData.photoFile ? 'Photo Selected' : 'Upload Photo'}
-              </Button>
-              {formData.photoFile && (
-                <p className="text-sm text-green-600 mt-1">
-                  Photo selected: {formData.photoFile.name}
-                </p>
-              )}
-            </div>
-          </div>
-
-          {/* Submit Buttons */}
-          <div className="flex flex-col sm:flex-row gap-3 pt-4">
-            <Button
-              type="submit"
-              disabled={isSubmitting}
-              className="flex-1 bg-gradient-to-r from-green-500 to-emerald-500 hover:from-green-600 hover:to-emerald-600"
-            >
-              {isSubmitting ? (
-                <>
-                  <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2"></div>
-                  Submitting...
-                </>
-              ) : (
-                <>
-                  <Send className="w-4 h-4 mr-2" />
-                  Submit Review
-                </>
-              )}
-            </Button>
-            <Button
-              type="button"
-              variant="outline"
-              onClick={onCancel}
-              className="flex-1"
-            >
-              Cancel
-            </Button>
-          </div>
-        </form>
-      </CardContent>
-    </Card>
-  );
-};
-
-// Main Reviews Section Component
-export const ReviewsSection = () => {
-  const [reviews, setReviews] = useState([]);
-  const [showWriteForm, setShowWriteForm] = useState(false);
+export const GoogleReviewsSection = () => {
+  const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    loadReviews();
+    let cancelled = false;
+    axios.get(`${API}/google-reviews`, { timeout: 10000 })
+      .then((response) => { if (!cancelled) setData(response.data || null); })
+      .catch((error) => { console.error('Google reviews unavailable:', error); if (!cancelled) setData(null); })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
   }, []);
 
-  const loadReviews = async () => {
-    try {
-      // Try to load from backend first
-      const response = await axios.get(`${API}/reviews`);
-      setReviews(response.data || []);
-    } catch (error) {
-      // Fallback: Load from localStorage and add some sample reviews
-      const localReviews = JSON.parse(localStorage.getItem('memoriesReviews') || '[]');
-      const sampleReviews = [
-        {
-          id: 1,
-          customerName: 'Priya Sharma',
-          location: 'Saravanampatti',
-          rating: 5,
-          reviewText: 'Amazing quality frames! The sublimation printing is crystal clear and the wooden frame is beautifully crafted. Highly recommend Memories for all your photo frame needs.',
-          productName: 'Custom Photo Frame',
-          createdAt: '2024-12-20T10:30:00Z',
-          verified: true,
-          helpfulCount: 12
-        },
-        {
-          id: 2,
-          customerName: 'Rajesh Kumar',
-          location: 'RS Puram',
-          rating: 5,
-          reviewText: 'Ordered 50 corporate mugs for our company event. Exceptional quality and delivered on time. The team at Memories is very professional and helpful.',
-          productName: 'Corporate Mugs',
-          createdAt: '2024-12-18T14:20:00Z',
-          verified: true,
-          helpfulCount: 8
-        },
-        {
-          id: 3,
-          customerName: 'Meera Krishnan',
-          location: 'Peelamedu',
-          rating: 5,
-          reviewText: 'Got custom t-shirts made for my daughter\'s birthday party. The prints are vibrant and the fabric quality is excellent. Kids loved them!',
-          productName: 'Custom T-Shirts',
-          createdAt: '2024-12-15T09:45:00Z',
-          verified: true,
-          helpfulCount: 15
-        }
-      ];
-      
-      setReviews([...sampleReviews, ...localReviews]);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleReviewSubmit = (newReview) => {
-    setReviews(prev => [newReview, ...prev]);
-    setShowWriteForm(false);
-  };
-
-  const averageRating = reviews.length > 0 
-    ? (reviews.reduce((sum, review) => sum + review.rating, 0) / reviews.length).toFixed(1)
-    : '4.9';
+  const live = data?.configured === true;
+  const reviews = live && Array.isArray(data?.reviews) ? data.reviews : [];
+  const rating = live ? Number(data?.rating || 0) : 0;
+  const total = live ? Number(data?.total || 0) : 0;
 
   return (
-    <section className="py-20 bg-gradient-to-br from-rose-50 to-pink-50">
+    <section className="py-16 bg-gradient-to-br from-rose-50 to-pink-50" data-testid="google-reviews">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-        <div className="text-center mb-16">
-          <Badge className="bg-green-100 text-green-800 mb-4">
-            <ThumbsUp className="w-3 h-3 mr-1" />
-            Customer Reviews
-          </Badge>
-          <h2 className="text-4xl font-bold text-gray-900 mb-4">
-            What Our 
-            <span className="bg-gradient-to-r from-green-600 to-emerald-600 bg-clip-text text-transparent"> Customers </span>
-            Say
-          </h2>
-          <p className="text-xl text-gray-600 max-w-3xl mx-auto mb-8">
-            Real reviews from real customers who love their personalized memories
-          </p>
-          
-          {/* Overall Rating */}
-          <div className="flex items-center justify-center space-x-6 mb-8">
-            <div className="text-center">
-              <div className="text-5xl font-bold text-gray-900">{averageRating}</div>
-              <StarRating rating={parseFloat(averageRating)} readonly={true} size="w-6 h-6" />
-              <p className="text-gray-600 mt-2">{reviews.length} reviews</p>
-            </div>
+        <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-5 mb-8">
+          <div>
+            <h2 className="text-3xl font-bold text-gray-900">Google Reviews</h2>
+            <p className="text-gray-600 mt-1">Only genuine reviews from the Memories Google Business Profile.</p>
+          </div>
+          <div className="flex flex-wrap gap-3">
+            <Button className="bg-rose-500 hover:bg-rose-600 text-white" onClick={() => window.open(GOOGLE_WRITE_REVIEW_URL, '_blank', 'noopener,noreferrer')}>
+              <Star className="w-4 h-4 mr-2" /> Write a Google Review
+            </Button>
+            <Button variant="outline" className="border-gray-300 text-gray-800 hover:bg-gray-100 hover:text-gray-900" onClick={() => window.open(live && data?.google_url ? data.google_url : GOOGLE_BUSINESS_URL, '_blank', 'noopener,noreferrer')}>
+              <ExternalLink className="w-4 h-4 mr-2" /> Read all on Google
+            </Button>
           </div>
         </div>
 
-        {/* Write Review Button */}
-        <div className="text-center mb-12">
-          <Button
-            onClick={() => setShowWriteForm(true)}
-            className="bg-gradient-to-r from-green-500 to-emerald-500 hover:from-green-600 hover:to-emerald-600 text-white px-8 py-4 text-lg"
-          >
-            <Star className="w-5 h-5 mr-2" />
-            Write a Review
-          </Button>
-        </div>
-
-        {/* Write Review Form Modal */}
-        <Dialog open={showWriteForm} onOpenChange={setShowWriteForm}>
-          <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
-            <WriteReviewForm
-              onSubmit={handleReviewSubmit}
-              onCancel={() => setShowWriteForm(false)}
-            />
-          </DialogContent>
-        </Dialog>
-
-        {/* Reviews Grid */}
         {loading ? (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-            {[1, 2, 3].map((i) => (
-              <Card key={i} className="animate-pulse">
-                <CardContent className="p-6">
-                  <div className="h-4 bg-gray-200 rounded mb-4"></div>
-                  <div className="h-16 bg-gray-200 rounded mb-4"></div>
-                  <div className="h-4 bg-gray-200 rounded"></div>
-                </CardContent>
-              </Card>
-            ))}
-          </div>
+          <div className="py-10 text-center text-gray-600"><Loader2 className="w-7 h-7 animate-spin mx-auto mb-3 text-rose-500" />Loading Google reviews...</div>
+        ) : !live ? (
+          <Card className="border-amber-200 bg-amber-50"><CardContent className="p-6 text-center"><p className="font-semibold text-gray-900">Google review details are temporarily unavailable on the website.</p><p className="text-sm text-gray-600 mt-1 mb-4">No sample or fabricated reviews are displayed. Please use Google directly for the current genuine reviews.</p><Button variant="outline" className="border-gray-300 text-gray-800 hover:bg-gray-100 hover:text-gray-900" onClick={() => window.open(GOOGLE_BUSINESS_URL, '_blank', 'noopener,noreferrer')}>Open Google Reviews</Button></CardContent></Card>
         ) : (
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            {reviews.map((review) => (
-              <ReviewCard key={review.id} review={review} />
-            ))}
-          </div>
-        )}
-
-        {/* Google Reviews CTA */}
-        <div className="text-center mt-16">
-          <div className="bg-white rounded-2xl p-8 shadow-lg border border-green-200 max-w-2xl mx-auto">
-            <div className="flex items-center justify-center space-x-4 mb-4">
-              <div className="w-8 h-8 bg-blue-500 rounded-full flex items-center justify-center">
-                <span className="text-white font-bold text-sm">G</span>
+          <>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-5 mb-7">
+              <Card><CardContent className="p-5 text-center"><div className="text-4xl font-bold text-rose-600">{rating.toFixed(1)}★</div><div className="flex justify-center mt-2">{stars(rating)}</div><div className="text-sm text-gray-600 mt-2">Google rating</div></CardContent></Card>
+              <Card><CardContent className="p-5 text-center"><div className="text-4xl font-bold text-gray-900">{Math.max(0, Math.floor(total))}</div><div className="text-sm text-gray-600 mt-2">Google reviews</div></CardContent></Card>
+              <Card><CardContent className="p-5 text-center"><MapPin className="w-6 h-6 text-green-600 mx-auto mb-2" /><div className="font-semibold text-gray-900">Memories · Coimbatore</div><div className="text-xs text-gray-600 mt-1">Review content is supplied by Google.</div></CardContent></Card>
+            </div>
+            {reviews.length > 0 ? (
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                {reviews.slice(0, 6).map((review, index) => (
+                  <Card key={`${review.author_name || 'google'}-${index}`} className="border-gray-200 bg-white">
+                    <CardContent className="p-5"><div className="flex items-start justify-between gap-3 mb-3"><span className="font-semibold text-gray-900 text-sm truncate">{review.author_name || 'Google customer'}</span>{stars(review.rating)}</div><p className="text-gray-700 text-sm leading-relaxed">{review.text || ''}</p>{review.relative_time && <p className="text-gray-400 text-xs mt-3">{review.relative_time}</p>}</CardContent>
+                  </Card>
+                ))}
               </div>
-              <div className="text-2xl font-bold text-gray-900">4.9★ on Google Reviews</div>
-            </div>
-            <p className="text-gray-600 mb-6">Join 263+ happy customers who rated us 5 stars!</p>
-            <div className="space-x-4">
-              <Button 
-                className="bg-blue-600 hover:bg-blue-700 text-white"
-                onClick={() => window.open('https://www.google.com/maps/place/Memories+-+Photo+Frames+%26+Customized+Gift+Shop/@11.0755,76.9983,17z/data=!4m8!3m7!1s0x3ba859410e43c55f:0xd0f1eaeacbc9bf40!8m2!3d11.0755!4d76.9983!9m1!1b1!16s%2Fg%2F11s2y8k8qw', '_blank')}
-              >
-                <ExternalLink className="w-4 h-4 mr-2" />
-                Read Google Reviews
-              </Button>
-            </div>
-          </div>
-        </div>
+            ) : <Card><CardContent className="p-6 text-center text-gray-600">Google has not returned review text for display right now. Use “Read all on Google” to see the current reviews.</CardContent></Card>}
+          </>
+        )}
       </div>
     </section>
   );
 };
+
+// Backward-compatible exports. Customer reviews are now Google-only.
+export const ReviewsSection = GoogleReviewsSection;
+export const WriteReviewForm = () => null;
+export const StarRating = ({ rating = 0 }) => stars(rating);
+
+export default GoogleReviewsSection;
