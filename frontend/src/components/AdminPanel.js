@@ -108,6 +108,7 @@ export const AdminPanel = () => {
   const [productDialog, setProductDialog] = useState({ open: false, mode: 'create', id: null });
   const [productForm, setProductForm] = useState({ name: '', description: '', category: 'frames', base_price: '', image_url: '' });
   const [genDescLoading, setGenDescLoading] = useState(false);
+  const [productImageUploading, setProductImageUploading] = useState(false);
 
   const generateDescription = async () => {
     if (!productForm.name.trim()) { toast.error('Enter a product name first'); return; }
@@ -121,6 +122,26 @@ export const AdminPanel = () => {
       handleApiError(error, 'Failed to generate description');
     } finally {
       setGenDescLoading(false);
+    }
+  };
+
+  const uploadProductImage = async (file) => {
+    if (!file) return;
+    if (!file.type?.startsWith('image/')) { toast.error('Please select an image file'); return; }
+    if (file.size > 15 * 1024 * 1024) { toast.error('Image must be 15 MB or smaller'); return; }
+    setProductImageUploading(true);
+    try {
+      const data = new FormData();
+      data.append('file', file);
+      const response = await axios.post(`${API}/upload-image`, data, { headers: { 'Content-Type': 'multipart/form-data' } });
+      const mime = file.type || 'image/jpeg';
+      const imageData = `data:${mime};base64,${response.data.image_data}`;
+      setProductForm((f) => ({ ...f, image_url: imageData }));
+      toast.success(response.data.quality_warning ? 'Image uploaded; print quality may be limited for large frames.' : 'Image uploaded successfully.');
+    } catch (error) {
+      toast.error(error.response?.data?.detail || 'Unable to upload image');
+    } finally {
+      setProductImageUploading(false);
     }
   };
 
@@ -458,10 +479,8 @@ export const AdminPanel = () => {
               </Button>
             </form>
             
-            <div className="mt-6 p-4 bg-gray-50 rounded-lg">
-              <p className="text-sm text-gray-600 mb-2">Demo Credentials:</p>
-              <p className="text-xs text-gray-500">Username: admin</p>
-              <p className="text-xs text-gray-500">Password: memories2024</p>
+            <div className="mt-6 text-center">
+              <a href={`${BACKEND_URL}/admin/recover`} target="_blank" rel="noreferrer" className="text-sm font-medium text-rose-600 hover:underline">Forgot admin password?</a>
             </div>
           </CardContent>
         </Card>
@@ -1246,9 +1265,18 @@ export const AdminPanel = () => {
                 <Input id="p-price" type="number" min="0" value={productForm.base_price} onChange={(e) => setProductForm({ ...productForm, base_price: e.target.value })} className="mt-1" data-testid="product-price-input" />
               </div>
             </div>
-            <div>
-              <Label htmlFor="p-img">Image URL</Label>
-              <Input id="p-img" value={productForm.image_url} onChange={(e) => setProductForm({ ...productForm, image_url: e.target.value })} className="mt-1" placeholder="https://..." data-testid="product-image-input" />
+            <div className="space-y-3">
+              <Label htmlFor="p-img">Product Image</Label>
+              <div className="flex flex-wrap items-center gap-2">
+                <label className="inline-flex cursor-pointer items-center gap-2 rounded-md border px-3 py-2 text-sm font-medium hover:bg-accent">
+                  <Upload className="h-4 w-4" />
+                  {productImageUploading ? 'Uploading…' : 'Upload Image'}
+                  <input type="file" accept="image/jpeg,image/png,image/heic,image/heif" className="hidden" disabled={productImageUploading} onChange={(e) => { uploadProductImage(e.target.files?.[0]); e.target.value = ''; }} />
+                </label>
+                <span className="text-xs text-gray-500">JPG, PNG or HEIC · max 15 MB</span>
+              </div>
+              {productForm.image_url && <img src={productForm.image_url} alt="Product preview" className="h-28 w-full rounded-lg border object-contain bg-gray-50" />}
+              <Input id="p-img" value={productForm.image_url} onChange={(e) => setProductForm({ ...productForm, image_url: e.target.value })} className="mt-1" placeholder="Or paste an image URL" data-testid="product-image-input" />
             </div>
             <Button onClick={submitProduct} className="w-full bg-gradient-to-r from-blue-500 to-indigo-600" data-testid="product-form-submit">
               {productDialog.mode === 'create' ? 'Create Product' : 'Save Changes'}
