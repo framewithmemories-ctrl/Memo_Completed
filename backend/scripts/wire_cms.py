@@ -2,7 +2,6 @@ from pathlib import Path
 
 server = Path(__file__).resolve().parents[1] / 'server.py'
 text = server.read_text(encoding='utf-8')
-marker = '# Include the router in the main app\n'
 
 if 'CMS Content Management Endpoints' in text:
     raise SystemExit(0)
@@ -82,8 +81,10 @@ async def get_public_cms():
         try:
             start = datetime.fromisoformat(item["starts_at"].replace("Z", "+00:00")) if item.get("starts_at") else None
             end = datetime.fromisoformat(item["ends_at"].replace("Z", "+00:00")) if item.get("ends_at") else None
-            if start and start > now: continue
-            if end and end < now: continue
+            if start and start > now:
+                continue
+            if end and end < now:
+                continue
         except (ValueError, TypeError):
             pass
         offers.append(item)
@@ -94,7 +95,11 @@ async def get_public_cms():
 
 '''
 
+# The existing server registers api_router near the bottom. Insert CMS routes immediately
+# before that registration so FastAPI includes them in the router.
+marker = 'app.include_router(api_router)'
 if marker not in text:
-    raise SystemExit('CMS insertion marker not found')
+    raise SystemExit('CMS insertion marker not found: app.include_router(api_router)')
+
 server.write_text(text.replace(marker, cms + marker, 1), encoding='utf-8')
 print('CMS backend routes wired.')
