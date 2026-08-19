@@ -7,12 +7,11 @@
     "@radix-ui/react-accordion": "^1.2.8",
     "@radix-ui/react-alert-dialog": "^1.1.11",
     "@radix-ui/react-aspect-ratio": "^1.1.4",
-    "@radix-ui/react-avatar": "^1.1.7",
     "@radix-ui/react-checkbox": "^1.2.3",
     "@radix-ui/react-collapsible": "^1.1.8",
     "@radix-ui/react-context-menu": "^2.2.12",
     "@radix-ui/react-dialog": "^1.1.11",
-    "@radix-ui/react-dropdown-menu": "^2.1.12",
+    "@radix-ui/react-dropdown-menu": "^2.1.11",
     "@radix-ui/react-hover-card": "^1.1.12",
     "@radix-ui/react-label": "^2.1.4",
     "@radix-ui/react-menubar": "^1.1.12",
@@ -47,7 +46,7 @@
     "react-helmet": "^6.1.0",
     "react-helmet-async": "^3.0.0",
     "react-hook-form": "^7.56.2",
-    "react-resizable-panels": "^3.0.1",
+    "react-resizable-panels": "^3.0.0",
     "react-router-dom": "^7.5.1",
     "react-scripts": "5.0.1",
     "sonner": "^2.0.3",
@@ -57,23 +56,15 @@
     "zod": "^3.24.4"
   },
   "scripts": {
-    "prestart": "node scripts/wire-cms-admin.js",
+    "prestart": "node scripts/wire-cms-admin.js && echo CMS_ADMIN_WIRING_COMPLETE",
     "start": "craco start",
-    "prebuild": "node scripts/wire-cms-admin.js",
+    "prebuild": "node scripts/wire-cms-admin.js && echo CMS_ADMIN_WIRING_COMPLETE",
     "build": "craco build",
     "test": "craco test"
   },
   "browserslist": {
-    "production": [
-      ">0.2%",
-      "not dead",
-      "not op_mini all"
-    ],
-    "development": [
-      "last 1 chrome version",
-      "last 1 firefox version",
-      "last 1 safari version"
-    ]
+    "production": [">0.2%", "not dead", "not op_mini all"],
+    "development": ["last 1 chrome version", "last 1 firefox version", "last 1 safari version"]
   },
   "devDependencies": {
     "@craco/craco": "^7.1.0",
@@ -81,7 +72,7 @@
     "autoprefixer": "^10.4.20",
     "eslint": "9.23.0",
     "eslint-plugin-import": "2.31.0",
-    "eslint-plugin-jsx-a11y": "6.10.2",
+    "eslint-plugin-jsx-a11y": "6.10.0",
     "eslint-plugin-react": "7.37.4",
     "globals": "15.15.0",
     "postcss": "^8.4.49",
