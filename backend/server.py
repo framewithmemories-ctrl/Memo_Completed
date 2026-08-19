@@ -2364,8 +2364,11 @@ logger = logging.getLogger(__name__)
 async def startup_seed_admin():
     """Seed the admin account (bcrypt-hashed) from env on startup."""
     try:
-        username = os.environ.get("ADMIN_USERNAME", "admin")
-        password = os.environ.get("ADMIN_PASSWORD", "memories2024")
+        username = os.environ.get("ADMIN_USERNAME", "").strip()
+        password = os.environ.get("ADMIN_PASSWORD", "")
+        if not username or not password:
+            logger.error("ADMIN_USERNAME and ADMIN_PASSWORD must be configured; refusing to seed an admin with insecure defaults")
+            return
         existing = await db.admins.find_one({"username": username})
         if not existing:
             await db.admins.insert_one({
