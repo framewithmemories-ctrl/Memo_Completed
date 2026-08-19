@@ -1,8 +1,8 @@
 """Production FastAPI entrypoint.
 
 The original Procfile started server:app directly, which meant auxiliary route
-modules (including Important Dates) were never imported. Keep server.py as the
-core app and explicitly load production route modules here.
+modules (including Important Dates and admin recovery) were never imported.
+Keep server.py as the core app and explicitly load production route modules here.
 """
 
 from fastapi.middleware.cors import CORSMiddleware
@@ -10,6 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from server import app
 
 # Register auxiliary routes on the same FastAPI app used in production.
+import admin_boot  # noqa: F401,E402
 import catalogue_audit  # noqa: F401,E402
 import important_events  # noqa: F401,E402
 
@@ -22,5 +23,5 @@ app.add_middleware(
     allow_origins=[origin.strip() for origin in __import__("os").environ.get("CORS_ORIGINS", "*").split(",") if origin.strip()],
     allow_credentials=False,
     allow_methods=["*"],
-    allow_headers=["*"],
+    allow_headers=["*"] ,
 )
