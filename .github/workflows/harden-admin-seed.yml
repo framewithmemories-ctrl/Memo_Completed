@@ -1,0 +1,31 @@
+name: Harden Admin Seed
+on:
+  push:
+    branches:
+      - feat/memories-visual-polish
+permissions:
+  contents: write
+jobs:
+  harden:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Remove insecure admin password defaults
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('backend/server.py')
+          s = p.read_text()
+          old = '''        username = os.environ.get("ADMIN_USERNAME", "admin")\n        password = os.environ.get("ADMIN_PASSWORD", "memories2024")\n        existing = await db.admins.find_one({"username": username})'''
+          new = '''        username = os.environ.get("ADMIN_USERNAME", "").strip()\n        password = os.environ.get("ADMIN_PASSWORD", "")\n        if not username or not password:\n            logger.error("ADMIN_USERNAME and ADMIN_PASSWORD must be configured; refusing to seed an admin with insecure defaults")\n            return\n        existing = await db.admins.find_one({"username": username})'''
+          if old not in s:
+              raise SystemExit('Expected admin seed block was not found')
+          p.write_text(s.replace(old, new, 1))
+          PY
+      - name: Commit hardening
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add backend/server.py
+          git commit -m "security: remove insecure admin credential defaults"
+          git push
