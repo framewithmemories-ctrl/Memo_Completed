@@ -20,6 +20,10 @@ RUN pip install --no-cache-dir \
 
 COPY . .
 
+# Keep the production server.py source clean in Git while ensuring the Docker image
+# contains the CMS API routes used by the Admin Content manager.
+RUN python scripts/wire_cms.py
+
 EXPOSE 8001
 
 # FastAPI app object is `app` inside server.py
