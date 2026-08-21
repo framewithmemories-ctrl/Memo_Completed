@@ -1,0 +1,41 @@
+name: Fix Admin Upload Import
+
+on:
+  push:
+    branches:
+      - feat/memories-visual-polish
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Add missing Upload icon import
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('frontend/src/components/AdminPanel.js')
+          s = p.read_text()
+          if '\\n  Upload,' not in s:
+              s = s.replace('  Copy\\n} from "lucide-react";', '  Copy,\\n  Upload\\n} from "lucide-react";')
+          p.write_text(s)
+          PY
+
+      - name: Commit and remove repair workflow
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add frontend/src/components/AdminPanel.js
+          git diff --cached --quiet && { echo "No change needed"; exit 0; }
+          git commit -m "fix: import Upload icon in admin panel"
+          git push
+          git rm .github/workflows/fix-admin-upload-import.yml
+          git commit -m "chore: remove one-time admin upload repair workflow"
+          git push

@@ -1,0 +1,196 @@
+name: Fix CMS UI
+
+on:
+  push:
+    branches:
+      - feat/memories-visual-polish
+
+permissions:
+  contents: write
+
+jobs:
+  patch-cms-ui:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: feat/memories-visual-polish
+
+      - name: Patch AdminPanel CMS
+        shell: python
+        run: |
+          from pathlib import Path
+          import re
+
+          p = Path('frontend/src/components/AdminPanel.js')
+          text = p.read_text(encoding='utf-8')
+
+          state_marker = "  const [productImageUploading, setProductImageUploading] = useState(false);"
+          state_insert = r'''  const [productImageUploading, setProductImageUploading] = useState(false);
+
+  // ============================ CMS ============================
+  const [cmsOffers, setCmsOffers] = useState([]);
+  const [cmsOfferForm, setCmsOfferForm] = useState({ title: '', discount: '', description: '', starts_at: '', ends_at: '', active: true, show_on_homepage: true, show_in_popup: false });
+  const [cmsHomepage, setCmsHomepage] = useState({ hero_title: '', hero_subtitle: '', hero_image_url: '' });
+  const [cmsAnnouncement, setCmsAnnouncement] = useState({ announcement_text: '', popup_description: '', popup_image_url: '', popup_enabled: true });
+  const [cmsLoading, setCmsLoading] = useState(false);
+  const [cmsSaving, setCmsSaving] = useState(false);
+
+  const loadCMS = async () => {
+    setCmsLoading(true);
+    try {
+      const response = await axios.get(`${API}/admin/cms`, adminAuthConfig());
+      setCmsOffers(response.data.offers || []);
+      setCmsHomepage({ hero_title: '', hero_subtitle: '', hero_image_url: '', ...(response.data.homepage || {}) });
+      setCmsAnnouncement({ announcement_text: '', popup_description: '', popup_image_url: '', popup_enabled: true, ...(response.data.announcement || {}) });
+    } catch (error) {
+      handleApiError(error, 'Failed to load CMS content');
+    } finally {
+      setCmsLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (isAuthenticated) loadCMS();
+  }, [isAuthenticated]);
+
+  const saveCMSOffer = async () => {
+    if (!cmsOfferForm.title.trim()) { toast.error('Offer title is required'); return; }
+    setCmsSaving(true);
+    try {
+      const payload = { ...cmsOfferForm };
+      if (!payload.starts_at) payload.starts_at = null;
+      if (!payload.ends_at) payload.ends_at = null;
+      await axios.post(`${API}/admin/cms/offers`, payload, adminAuthConfig());
+      toast.success('Offer saved successfully');
+      setCmsOfferForm({ title: '', discount: '', description: '', starts_at: '', ends_at: '', active: true, show_on_homepage: true, show_in_popup: false });
+      await loadCMS();
+    } catch (error) {
+      handleApiError(error, 'Failed to save offer');
+    } finally {
+      setCmsSaving(false);
+    }
+  };
+
+  const deleteCMSOffer = async (id) => {
+    if (!window.confirm('Delete this offer?')) return;
+    try {
+      await axios.delete(`${API}/admin/cms/offers/${id}`, adminAuthConfig());
+      toast.success('Offer deleted');
+      await loadCMS();
+    } catch (error) {
+      handleApiError(error, 'Failed to delete offer');
+    }
+  };
+
+  const saveCMSHomepage = async () => {
+    setCmsSaving(true);
+    try {
+      await axios.put(`${API}/admin/cms/homepage`, cmsHomepage, adminAuthConfig());
+      toast.success('Homepage content saved');
+      await loadCMS();
+    } catch (error) {
+      handleApiError(error, 'Failed to save homepage content');
+    } finally {
+      setCmsSaving(false);
+    }
+  };
+
+  const saveCMSAnnouncement = async () => {
+    setCmsSaving(true);
+    try {
+      await axios.put(`${API}/admin/cms/announcement`, cmsAnnouncement, adminAuthConfig());
+      toast.success('Announcement & popup saved');
+      await loadCMS();
+    } catch (error) {
+      handleApiError(error, 'Failed to save announcement & popup');
+    } finally {
+      setCmsSaving(false);
+    }
+  };'''
+
+          if state_marker not in text:
+              raise SystemExit('CMS state marker not found')
+          if 'const [cmsOffers, setCmsOffers]' not in text:
+              text = text.replace(state_marker, state_insert, 1)
+
+          pattern = re.compile(r"  const renderContentManagement = \(\) => \(.*?\n  \);\n\n  if \(!isAuthenticated\)", re.S)
+          replacement = r'''  const renderContentManagement = () => (
+    <div className="space-y-6">
+      <div className="flex items-center justify-between">
+        <div>
+          <h2 className="text-2xl font-bold text-gray-900">Content Management</h2>
+          <p className="text-sm text-gray-500 mt-1">Live CMS controls for offers, homepage content, announcement and popup.</p>
+        </div>
+        <div className="flex items-center gap-2">
+          <Badge variant="secondary" className="bg-green-100 text-green-800">Connected</Badge>
+          <Button variant="outline" onClick={loadCMS} disabled={cmsLoading}>
+            <RefreshCw className={`w-4 h-4 mr-2 ${cmsLoading ? 'animate-spin' : ''}`} />Refresh
+          </Button>
+        </div>
+      </div>
+
+      <Card>
+        <CardHeader><CardTitle>🎁 Offers</CardTitle><CardDescription>Create live promotional offers stored in the CMS database.</CardDescription></CardHeader>
+        <CardContent className="space-y-4">
+          <Input value={cmsOfferForm.title} onChange={(e) => setCmsOfferForm((f) => ({ ...f, title: e.target.value }))} placeholder="Offer title" />
+          <Input value={cmsOfferForm.discount} onChange={(e) => setCmsOfferForm((f) => ({ ...f, discount: e.target.value }))} placeholder="Discount e.g. 25% OFF" />
+          <Textarea value={cmsOfferForm.description} onChange={(e) => setCmsOfferForm((f) => ({ ...f, description: e.target.value }))} placeholder="Offer description" rows={3} />
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            <Input type="datetime-local" value={cmsOfferForm.starts_at} onChange={(e) => setCmsOfferForm((f) => ({ ...f, starts_at: e.target.value }))} />
+            <Input type="datetime-local" value={cmsOfferForm.ends_at} onChange={(e) => setCmsOfferForm((f) => ({ ...f, ends_at: e.target.value }))} />
+          </div>
+          <div className="flex flex-wrap gap-4 text-sm">
+            <label className="flex items-center gap-2"><input type="checkbox" checked={cmsOfferForm.active} onChange={(e) => setCmsOfferForm((f) => ({ ...f, active: e.target.checked }))} /> Active</label>
+            <label className="flex items-center gap-2"><input type="checkbox" checked={cmsOfferForm.show_on_homepage} onChange={(e) => setCmsOfferForm((f) => ({ ...f, show_on_homepage: e.target.checked }))} /> Show on homepage</label>
+            <label className="flex items-center gap-2"><input type="checkbox" checked={cmsOfferForm.show_in_popup} onChange={(e) => setCmsOfferForm((f) => ({ ...f, show_in_popup: e.target.checked }))} /> Show in popup</label>
+          </div>
+          <Button onClick={saveCMSOffer} disabled={cmsSaving}><Gift className="w-4 h-4 mr-2" />{cmsSaving ? 'Saving...' : 'Save Offer'}</Button>
+          {cmsOffers.length > 0 && <div className="space-y-2 pt-2"><div className="text-sm font-semibold">Saved offers</div>{cmsOffers.map((offer) => <div key={offer.id} className="flex items-center justify-between border rounded-lg p-3"><div><div className="font-medium">{offer.title}</div><div className="text-sm text-gray-500">{offer.discount || 'No discount'} · {offer.active ? 'Active' : 'Inactive'}</div></div><Button variant="ghost" size="sm" onClick={() => deleteCMSOffer(offer.id)}><Trash2 className="w-4 h-4" /></Button></div>)}</div>}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader><CardTitle>🏠 Homepage</CardTitle><CardDescription>Update the storefront hero content.</CardDescription></CardHeader>
+        <CardContent className="space-y-4">
+          <Input value={cmsHomepage.hero_title} onChange={(e) => setCmsHomepage((f) => ({ ...f, hero_title: e.target.value }))} placeholder="Hero title" />
+          <Textarea value={cmsHomepage.hero_subtitle} onChange={(e) => setCmsHomepage((f) => ({ ...f, hero_subtitle: e.target.value }))} placeholder="Hero subtitle" rows={3} />
+          <Input value={cmsHomepage.hero_image_url} onChange={(e) => setCmsHomepage((f) => ({ ...f, hero_image_url: e.target.value }))} placeholder="Hero image URL" />
+          <Button onClick={saveCMSHomepage} disabled={cmsSaving}><Home className="w-4 h-4 mr-2" />{cmsSaving ? 'Saving...' : 'Save Homepage'}</Button>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader><CardTitle>📢 Announcement & Popup</CardTitle><CardDescription>Control the top announcement and opening popup.</CardDescription></CardHeader>
+        <CardContent className="space-y-4">
+          <Input value={cmsAnnouncement.announcement_text} onChange={(e) => setCmsAnnouncement((f) => ({ ...f, announcement_text: e.target.value }))} placeholder="Top announcement text" />
+          <Textarea value={cmsAnnouncement.popup_description} onChange={(e) => setCmsAnnouncement((f) => ({ ...f, popup_description: e.target.value }))} placeholder="Popup description" rows={3} />
+          <Input value={cmsAnnouncement.popup_image_url} onChange={(e) => setCmsAnnouncement((f) => ({ ...f, popup_image_url: e.target.value }))} placeholder="Popup image URL" />
+          <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={cmsAnnouncement.popup_enabled} onChange={(e) => setCmsAnnouncement((f) => ({ ...f, popup_enabled: e.target.checked }))} /> Enable popup</label>
+          <Button onClick={saveCMSAnnouncement} disabled={cmsSaving}><Megaphone className="w-4 h-4 mr-2" />{cmsSaving ? 'Saving...' : 'Save Announcement & Popup'}</Button>
+        </CardContent>
+      </Card>
+    </div>
+  );
+
+  if (!isAuthenticated)'''
+          new_text, count = pattern.subn(replacement, text, count=1)
+          if count != 1:
+              raise SystemExit('CMS render block not found')
+
+          p.write_text(new_text, encoding='utf-8')
+          print('CMS UI patched successfully')
+
+      - name: Commit and push
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add frontend/src/components/AdminPanel.js
+          if git diff --cached --quiet; then
+            echo "No CMS UI changes needed"
+            exit 0
+          fi
+          git commit -m "fix(cms): connect admin content controls"
+          git push origin HEAD:feat/memories-visual-polish

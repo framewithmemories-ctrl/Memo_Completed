@@ -9,7 +9,7 @@ import { Badge } from './ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from './ui/tabs';
 import { Switch } from './ui/switch';
 import { toast } from 'sonner';
-import { Plus, Trash2, Save, Image as ImageIcon } from 'lucide-react';
+import { Plus, Trash2, Save, Image as ImageIcon, Upload, Loader2 } from 'lucide-react';
 
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
 const API = `${BACKEND_URL}/api`;
@@ -51,6 +51,7 @@ const normalizeProduct = (product = {}) => ({
 export const AdminProductV2Editor = ({ product, onSaved, onCancel }) => {
   const [form, setForm] = useState(() => normalizeProduct(product));
   const [saving, setSaving] = useState(false);
+  const [uploading, setUploading] = useState(false);
 
   const isEditing = Boolean(product?.id);
   const previewPrice = useMemo(() => {
@@ -68,6 +69,34 @@ export const AdminProductV2Editor = ({ product, onSaved, onCancel }) => {
   const addGalleryImage = () => setNested('media', 'gallery', [...form.media.gallery, '']);
   const updateGalleryImage = (index, value) => setNested('media', 'gallery', form.media.gallery.map((image, i) => i === index ? value : image));
   const removeGalleryImage = (index) => setNested('media', 'gallery', form.media.gallery.filter((_, i) => i !== index));
+
+  const uploadImage = async (file, target = 'primary', index = null) => {
+    if (!file) return;
+    if (!file.type?.startsWith('image/')) return toast.error('Please select an image file');
+    if (file.size > 15 * 1024 * 1024) return toast.error('Image must be 15 MB or smaller');
+
+    setUploading(true);
+    try {
+      const data = new FormData();
+      data.append('file', file);
+      const response = await axios.post(`${API}/upload-image`, data, { headers: { 'Content-Type': 'multipart/form-data' } });
+      const mime = file.type || 'image/jpeg';
+      const imageData = `data:${mime};base64,${response.data.image_data}`;
+
+      if (target === 'primary') {
+        setNested('media', 'primary_image', imageData);
+        setField('image_url', imageData);
+      } else if (target === 'gallery' && index !== null) {
+        updateGalleryImage(index, imageData);
+      }
+      const quality = response.data.quality_warning ? 'Image uploaded; print quality may be limited for large frames.' : 'Image uploaded successfully.';
+      toast.success(quality);
+    } catch (error) {
+      toast.error(error.response?.data?.detail || 'Unable to upload image');
+    } finally {
+      setUploading(false);
+    }
+  };
 
   const handleSave = async () => {
     if (!form.name.trim()) return toast.error('Product name is required');
@@ -109,7 +138,7 @@ export const AdminProductV2Editor = ({ product, onSaved, onCancel }) => {
         </div>
         <div className="flex gap-2">
           <Button variant="outline" onClick={onCancel}>Cancel</Button>
-          <Button onClick={handleSave} disabled={saving} className="gap-2"><Save className="h-4 w-4" />{saving ? 'Saving…' : 'Save Product'}</Button>
+          <Button onClick={handleSave} disabled={saving || uploading} className="gap-2"><Save className="h-4 w-4" />{saving ? 'Saving…' : 'Save Product'}</Button>
         </div>
       </div>
 
@@ -148,9 +177,18 @@ export const AdminProductV2Editor = ({ product, onSaved, onCancel }) => {
           <div className="space-y-2"><Label>Maximum photos</Label><Input type="number" min="0" value={form.customization.max_photos} onChange={(e) => setNested('customization', 'max_photos', Number(e.target.value))} /></div>
         </CardContent></Card></TabsContent>
 
-        <TabsContent value="media"><Card><CardHeader><CardTitle>Product media</CardTitle></CardHeader><CardContent className="space-y-4">
-          <div className="space-y-2"><Label>Primary image URL</Label><div className="flex gap-2"><Input value={form.media.primary_image || form.image_url} onChange={(e) => { setNested('media', 'primary_image', e.target.value); setField('image_url', e.target.value); }} placeholder="https://…" /><ImageIcon className="mt-2 h-5 w-5 text-muted-foreground" /></div></div>
-          <div className="space-y-3"><div className="flex items-center justify-between"><Label>Gallery</Label><Button variant="outline" onClick={addGalleryImage}><Plus className="mr-2 h-4 w-4" />Add image</Button></div>{form.media.gallery.map((image, index) => <div className="flex gap-2" key={`${index}-${image}`}><Input value={image} onChange={(e) => updateGalleryImage(index, e.target.value)} placeholder="Gallery image URL" /><Button variant="ghost" onClick={() => removeGalleryImage(index)} className="text-destructive"><Trash2 className="h-4 w-4" /></Button></div>)}</div>
+        <TabsContent value="media"><Card><CardHeader><CardTitle>Product media</CardTitle></CardHeader><CardContent className="space-y-5">
+          <div className="space-y-3 rounded-xl border p-4">
+            <div className="flex items-center justify-between gap-3"><div><Label>Primary product image</Label><p className="text-xs text-muted-foreground">Upload a JPG, PNG or HEIC image up to 15 MB.</p></div><label className="inline-flex cursor-pointer items-center gap-2 rounded-md border px-3 py-2 text-sm font-medium hover:bg-accent"><Upload className="h-4 w-4" />Upload image<input type="file" accept="image/jpeg,image/png,image/heic,image/heif" className="hidden" disabled={uploading} onChange={(e) => { uploadImage(e.target.files?.[0], 'primary'); e.target.value = ''; }} /></label></div>
+            {uploading && <div className="flex items-center gap-2 text-sm text-muted-foreground"><Loader2 className="h-4 w-4 animate-spin" />Uploading and checking image quality…</div>}
+            {(form.media.primary_image || form.image_url) && <img src={form.media.primary_image || form.image_url} alt="Product preview" className="h-40 w-full rounded-lg border object-contain bg-gray-50" />}
+            <div className="space-y-2"><Label>Or use an image URL</Label><div className="flex gap-2"><Input value={form.media.primary_image || form.image_url} onChange={(e) => { setNested('media', 'primary_image', e.target.value); setField('image_url', e.target.value); }} placeholder="https://…" /><ImageIcon className="mt-2 h-5 w-5 shrink-0 text-muted-foreground" /></div></div>
+          </div>
+
+          <div className="space-y-3 rounded-xl border p-4"><div className="flex items-center justify-between"><div><Label>Gallery</Label><p className="text-xs text-muted-foreground">Add multiple product/lifestyle images.</p></div><Button variant="outline" onClick={addGalleryImage}><Plus className="mr-2 h-4 w-4" />Add image</Button></div>
+            {form.media.gallery.map((image, index) => <div className="space-y-2 rounded-lg border p-3" key={`${index}-${image}`}><div className="flex gap-2"><Input value={image} onChange={(e) => updateGalleryImage(index, e.target.value)} placeholder="Gallery image URL" /><label className="inline-flex shrink-0 cursor-pointer items-center gap-2 rounded-md border px-3 text-sm font-medium hover:bg-accent"><Upload className="h-4 w-4" />Upload<input type="file" accept="image/jpeg,image/png,image/heic,image/heif" className="hidden" disabled={uploading} onChange={(e) => { uploadImage(e.target.files?.[0], 'gallery', index); e.target.value = ''; }} /></label><Button variant="ghost" onClick={() => removeGalleryImage(index)} className="text-destructive"><Trash2 className="h-4 w-4" /></Button></div>{image && <img src={image} alt={`Gallery ${index + 1}`} className="h-24 w-full rounded-md border object-contain bg-gray-50" />}</div>)}
+          </div>
+
           <div className="space-y-2"><Label>Video URL (optional)</Label><Input value={form.media.video_url} onChange={(e) => setNested('media', 'video_url', e.target.value)} /></div>
         </CardContent></Card></TabsContent>
 

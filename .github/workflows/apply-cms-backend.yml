@@ -1,0 +1,34 @@
+name: Apply CMS backend routes
+
+on:
+  push:
+    branches: [feat/memories-visual-polish]
+    paths:
+      - 'backend/scripts/wire_cms.py'
+      - '.github/workflows/apply-cms-backend.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: ${{ !startsWith(github.event.head_commit.message, 'chore(cms):') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/memories-visual-polish
+          fetch-depth: 1
+      - name: Apply CMS routes to server.py
+        run: python backend/scripts/wire_cms.py
+      - name: Commit backend routes
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add backend/server.py
+          if git diff --cached --quiet; then
+            echo 'CMS routes already present.'
+            exit 0
+          fi
+          git commit -m 'chore(cms): apply CMS API routes to backend'
+          git push origin feat/memories-visual-polish
