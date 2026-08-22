@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import axios from 'axios';
 import { Button } from "./ui/button";
 import { Card, CardContent } from "./ui/card";
-import { Star, ExternalLink, MapPin, Loader2, ChevronLeft, ChevronRight } from "lucide-react";
+import { Star, ExternalLink, MapPin, Loader2, ChevronLeft, ChevronRight, RefreshCw } from "lucide-react";
 
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
 const API = `${BACKEND_URL}/api`;
@@ -27,28 +27,39 @@ const renderStars = (rating) => (
   </div>
 );
 
+const explainError = (errorCode) => {
+  if (errorCode === 'missing_google_places_api_key') return 'The Google Places API key is not configured on the website backend.';
+  if (errorCode === 'google_http_400') return 'Google rejected the Places request. The Place ID or request configuration needs checking.';
+  if (errorCode === 'google_http_401' || errorCode === 'google_http_403') return 'Google rejected the Places API key. Check that the key is valid and the Places API is enabled for its Google Cloud project.';
+  if (errorCode === 'google_http_404') return 'Google could not find the configured Place ID.';
+  if (errorCode === 'google_http_429') return 'Google rate-limited the Places request. Please retry shortly.';
+  if (errorCode === 'google_reviews_unavailable') return 'The Google review service could not be reached right now.';
+  return 'The Google review connection is not ready yet.';
+};
+
 export const ReviewSystemEnhanced = () => {
   const [googleData, setGoogleData] = useState(null);
   const [isLoading, setIsLoading] = useState(true);
   const [activeIndex, setActiveIndex] = useState(0);
 
+  const loadGoogleReviews = async () => {
+    setIsLoading(true);
+    try {
+      const response = await axios.get(`${API}/google-reviews`, { timeout: 4500, headers: { Accept: 'application/json' } });
+      setGoogleData(response.data || null);
+    } catch (error) {
+      console.error('Unable to load Google reviews:', error);
+      setGoogleData({ configured: false, error: 'google_reviews_unavailable' });
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   useEffect(() => {
-    let cancelled = false;
-
-    const loadGoogleReviews = async () => {
-      try {
-        const response = await axios.get(`${API}/google-reviews`, { timeout: 10000 });
-        if (!cancelled) setGoogleData(response.data || null);
-      } catch (error) {
-        console.error('Unable to load Google reviews:', error);
-        if (!cancelled) setGoogleData(null);
-      } finally {
-        if (!cancelled) setIsLoading(false);
-      }
-    };
-
-    loadGoogleReviews();
-    return () => { cancelled = true; };
+    // Reviews are a lower-page enhancement. Give the main storefront a chance to
+    // become interactive before waking a sleeping Render backend.
+    const timer = setTimeout(loadGoogleReviews, 1200);
+    return () => clearTimeout(timer);
   }, []);
 
   const isConfigured = googleData?.configured === true;
@@ -120,22 +131,20 @@ export const ReviewSystemEnhanced = () => {
       {isLoading ? (
         <div className="py-10 text-center text-gray-600">
           <Loader2 className="w-7 h-7 animate-spin mx-auto mb-3 text-rose-500" />
-          Loading Google reviews...
+          Loading Google reviews…
         </div>
       ) : !isConfigured ? (
         <div className="rounded-xl border border-amber-200 bg-amber-50 p-5 text-center">
           <p className="font-semibold text-gray-900 mb-1">Google reviews are not connected yet.</p>
-          <p className="text-sm text-gray-600 mb-4">
-            We will only display genuine reviews supplied by Google. Until the Google Business Profile connection is configured, no sample or invented reviews are shown here.
-          </p>
-          <Button
-            type="button"
-            variant="outline"
-            className="border-gray-300 text-gray-800 hover:bg-gray-100"
-            onClick={() => window.open(GOOGLE_REVIEWS_URL, '_blank', 'noopener,noreferrer')}
-          >
-            Read genuine reviews on Google
-          </Button>
+          <p className="text-sm text-gray-600 mb-4">{explainError(googleData?.error)}</p>
+          <div className="flex flex-wrap justify-center gap-3">
+            <Button type="button" variant="outline" className="border-gray-300 text-gray-800 hover:bg-gray-100" onClick={loadGoogleReviews}>
+              <RefreshCw className="w-4 h-4 mr-2" /> Retry connection
+            </Button>
+            <Button type="button" variant="outline" className="border-gray-300 text-gray-800 hover:bg-gray-100" onClick={() => window.open(GOOGLE_REVIEWS_URL, '_blank', 'noopener,noreferrer')}>
+              Read genuine reviews on Google
+            </Button>
+          </div>
         </div>
       ) : (
         <>
@@ -159,15 +168,11 @@ export const ReviewSystemEnhanced = () => {
           {reviews.length > 0 ? (
             <>
               <div className="flex items-center justify-between gap-3 mb-4">
-                <p className="text-xs text-gray-500">Reviews rotate automatically.</p>
+                <p className="text-xs text-gray-500">Reviews are shown in Google’s relevance order and rotate automatically.</p>
                 {reviews.length > 1 && (
                   <div className="flex gap-2">
-                    <Button type="button" variant="outline" size="icon" onClick={() => move(-1)} aria-label="Previous review">
-                      <ChevronLeft className="w-4 h-4" />
-                    </Button>
-                    <Button type="button" variant="outline" size="icon" onClick={() => move(1)} aria-label="Next review">
-                      <ChevronRight className="w-4 h-4" />
-                    </Button>
+                    <Button type="button" variant="outline" size="icon" onClick={() => move(-1)} aria-label="Previous review"><ChevronLeft className="w-4 h-4" /></Button>
+                    <Button type="button" variant="outline" size="icon" onClick={() => move(1)} aria-label="Next review"><ChevronRight className="w-4 h-4" /></Button>
                   </div>
                 )}
               </div>
@@ -177,15 +182,23 @@ export const ReviewSystemEnhanced = () => {
                   <Card key={`${review.author_name || 'google'}-${activeIndex}-${index}`} className="border-gray-200 bg-gray-50/50">
                     <CardContent className="p-5">
                       <div className="flex items-start justify-between gap-3 mb-3">
-                        <span className="font-semibold text-gray-900 text-sm truncate">{review.author_name || 'Google customer'}</span>
+                        {review.author_uri ? (
+                          <a href={review.author_uri} target="_blank" rel="noreferrer" className="font-semibold text-gray-900 text-sm truncate hover:text-blue-600">{review.author_name || 'Google customer'}</a>
+                        ) : (
+                          <span className="font-semibold text-gray-900 text-sm truncate">{review.author_name || 'Google customer'}</span>
+                        )}
                         {renderStars(review.rating)}
                       </div>
                       <p className="text-gray-700 text-sm leading-relaxed">“{review.text || 'Google review'}”</p>
-                      {review.relative_time && <p className="text-gray-400 text-xs mt-3">{review.relative_time}</p>}
+                      <div className="flex items-center justify-between gap-3 mt-3">
+                        {review.relative_time ? <p className="text-gray-400 text-xs">{review.relative_time}</p> : <span />}
+                        {review.google_review_url && <a href={review.google_review_url} target="_blank" rel="noreferrer" className="text-xs text-blue-600 hover:underline whitespace-nowrap">View on Google</a>}
+                      </div>
                     </CardContent>
                   </Card>
                 ))}
               </div>
+              <p className="text-xs text-gray-500 mt-4">Google Maps reviews are displayed with their author attribution and direct source link.</p>
             </>
           ) : (
             <div className="rounded-xl border border-gray-200 bg-gray-50 p-6 text-center text-gray-600">
