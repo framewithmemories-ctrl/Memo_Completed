@@ -1,32 +1,31 @@
 const fs = require('fs');
 const path = require('path');
 
-// Keep the announcement banner CMS-driven without allowing a sleeping backend to
-// block the rest of the homepage. The hero has its own non-blocking cache/fallback
-// wiring in wire-cms-admin.js.
+// Build-time guard for the public homepage. Do NOT hide the hero while CMS
+// requests are in flight: a sleeping backend can wake slowly on Render, and
+// hiding the hero creates a visible blank/fold effect on first load.
 const bannerFile = path.join(__dirname, '..', 'src', 'components', 'CmsAnnouncementBanner.js');
 let bannerText = fs.readFileSync(bannerFile, 'utf8');
 
-bannerText = bannerText.replace(
-  'const [text, setText] = useState("");',
-  'const [text, setText] = useState("");\n  const [loaded, setLoaded] = useState(false);'
-);
-
-bannerText = bannerText.replace(
-  'const load = async () => {\n      try {\n        const response = await fetch(`${API}/cms`, { headers: { Accept: "application/json" } });\n        if (!response.ok) return;\n        const data = await response.json();\n        const value = data?.announcement?.announcement_text;\n        if (!cancelled && value) setText(value);\n      } catch (error) {\n        console.warn("CMS announcement load failed", error);\n      }',
-  'const load = async () => {\n      const controller = new AbortController();\n      const timeoutId = setTimeout(() => controller.abort(), 4500);\n      try {\n        const response = await fetch(`${API}/cms`, { headers: { Accept: "application/json" }, cache: "no-store", signal: controller.signal });\n        if (!response.ok) return;\n        const data = await response.json();\n        const value = data?.announcement?.announcement_text;\n        if (!cancelled && value) setText(value);\n      } catch (error) {\n        console.warn("CMS announcement load failed", error);\n      } finally {\n        clearTimeout(timeoutId);\n        if (!cancelled) setLoaded(true);\n      }'
-);
-
-bannerText = bannerText.replace(
-  'return <span>{text || "🎉 Grand Opening Offer: 25% OFF All Frames + Free Home Delivery! 🎉"}</span>;',
-  'if (!loaded || !text) return null;\n  return <span>{text}</span>;'
-);
-
+// The banner component owns a fixed-height placeholder while CMS data loads.
+// Keep this script idempotent and refuse to reintroduce the old hard-coded offer.
 if (bannerText.includes('Grand Opening Offer: 25% OFF All Frames + Free Home Delivery!')) {
   throw new Error('Legacy announcement fallback is still present');
 }
-if (!bannerText.includes('setLoaded(true)')) throw new Error('CMS announcement loading guard was not wired');
+if (!bannerText.includes('min-h-[20px]')) {
+  throw new Error('CMS announcement banner must reserve stable height while loading');
+}
 
-fs.writeFileSync(bannerFile, bannerText, 'utf8');
+// wire-cms-admin.js is responsible for homepage CMS wiring. This script
+// intentionally does not add an opacity/loading gate around HeroSection.
+const heroFile = path.join(__dirname, '..', 'src', 'components', 'MainComponents.js');
+let heroText = fs.readFileSync(heroFile, 'utf8');
 
-console.log('CMS loading guard applied: homepage remains responsive while CMS data loads.');
+// Remove the old loading gate if it exists in a previously transformed working tree.
+heroText = heroText.replace(
+  /className=\{`relative min-h-\[700px\] bg-gradient-to-br from-rose-50 via-pink-50 to-orange-50 overflow-hidden \$\{cmsHeroLoaded \? "opacity-100" : "opacity-0"\}`\}/g,
+  'className="relative min-h-[700px] bg-gradient-to-br from-rose-50 via-pink-50 to-orange-50 overflow-hidden"'
+);
+
+fs.writeFileSync(heroFile, heroText, 'utf8');
+console.log('CMS loading guard verified: homepage renders immediately and announcement height remains stable.');
