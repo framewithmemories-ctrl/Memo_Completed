@@ -25,6 +25,7 @@ export const FramePreviewCustomizer = () => {
   const [borderWidth, setBorderWidth] = useState(18);
   const [zoom, setZoom] = useState(100);
   const [selectedSize, setSelectedSize] = useState("12 × 8");
+  const [orientation, setOrientation] = useState("landscape");
   const [mode, setMode] = useState("frame");
   const fileInputRef = useRef(null);
 
@@ -36,6 +37,7 @@ export const FramePreviewCustomizer = () => {
       setBorderWidth(18);
       setZoom(100);
       setSelectedSize("12 × 8");
+      setOrientation("landscape");
       setMode("frame");
       setOpen(true);
     };
@@ -43,6 +45,11 @@ export const FramePreviewCustomizer = () => {
     window.addEventListener("memories:customize-frame", handleOpen);
     return () => window.removeEventListener("memories:customize-frame", handleOpen);
   }, []);
+
+  const detectOrientation = (width, height) => {
+    if (!width || !height || width === height) return "landscape";
+    return width > height ? "landscape" : "portrait";
+  };
 
   const handleLocalPhoto = (event) => {
     const file = event.target.files?.[0];
@@ -57,10 +64,14 @@ export const FramePreviewCustomizer = () => {
     setBorderWidth(18);
     setZoom(100);
     setSelectedSize("12 × 8");
+    setOrientation("landscape");
     setMode("frame");
   };
 
-  const selectedRatio = FRAME_SIZES.find(([label]) => label === selectedSize)?.[1] || 1.5;
+  const baseRatio = FRAME_SIZES.find(([label]) => label === selectedSize)?.[1] || 1.5;
+  const selectedRatio = orientation === "portrait" && baseRatio !== 1
+    ? 1 / baseRatio
+    : baseRatio;
   const frameWidth = selectedRatio < 1 ? 220 : 300;
   const frameHeight = Math.round(frameWidth / selectedRatio);
 
@@ -74,7 +85,7 @@ export const FramePreviewCustomizer = () => {
               See Your Photo Framed
             </DialogTitle>
             <DialogDescription>
-              Preview the recommendation with a realistic black frame before you order. Adjust the frame thickness live.
+              Preview the recommendation with a realistic black frame before you order. Adjust the orientation, frame thickness and size live.
             </DialogDescription>
           </DialogHeader>
         </div>
@@ -95,6 +106,7 @@ export const FramePreviewCustomizer = () => {
                 <img
                   src={imageUrl}
                   alt="Framed photo preview"
+                  onLoad={(event) => setOrientation(detectOrientation(event.currentTarget.naturalWidth, event.currentTarget.naturalHeight))}
                   className="w-full h-full object-cover bg-white transition-transform duration-200"
                   style={{ transform: `scale(${zoom / 100})` }}
                 />
@@ -102,7 +114,7 @@ export const FramePreviewCustomizer = () => {
                 <div className="w-full h-full bg-white flex flex-col items-center justify-center text-gray-400 text-center p-6">
                   <ImageIcon className="w-12 h-12 mb-3" />
                   <p className="font-medium">Upload your photo to preview it</p>
-                  <p className="text-sm mt-1">The black frame will update instantly.</p>
+                  <p className="text-sm mt-1">The frame orientation and black border will update instantly.</p>
                 </div>
               )}
             </div>
@@ -123,9 +135,34 @@ export const FramePreviewCustomizer = () => {
             <input ref={fileInputRef} type="file" accept="image/*" className="hidden" onChange={handleLocalPhoto} />
 
             <div>
+              <label className="text-sm font-semibold text-gray-900 block mb-2">Photo orientation</label>
+              <div className="grid grid-cols-2 gap-2">
+                <Button
+                  type="button"
+                  variant={orientation === "portrait" ? "default" : "outline"}
+                  onClick={() => setOrientation("portrait")}
+                  className="h-11"
+                >
+                  <span className="inline-block w-3 h-5 border-2 border-current rounded-sm mr-2" />
+                  Portrait
+                </Button>
+                <Button
+                  type="button"
+                  variant={orientation === "landscape" ? "default" : "outline"}
+                  onClick={() => setOrientation("landscape")}
+                  className="h-11"
+                >
+                  <span className="inline-block w-5 h-3 border-2 border-current rounded-sm mr-2" />
+                  Landscape
+                </Button>
+              </div>
+              <p className="text-xs text-gray-400 mt-2">The uploaded photo is detected automatically, and you can override it here.</p>
+            </div>
+
+            <div>
               <div className="flex items-center justify-between mb-2">
                 <label className="text-sm font-semibold text-gray-900">Frame size</label>
-                <span className="text-sm text-gray-600">{selectedSize}</span>
+                <span className="text-sm text-gray-600">{selectedSize} {orientation === "portrait" ? "Portrait" : "Landscape"}</span>
               </div>
               <select
                 value={selectedSize}
