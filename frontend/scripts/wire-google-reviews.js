@@ -38,6 +38,16 @@ if (text.includes(oldProductFetch)) {
   text = text.replace(oldProductFetch, newProductFetch);
 }
 
+// Patch the Google review client so a sleeping backend does not permanently show a failure.
+const reviewPath = path.join(__dirname, '..', 'src', 'components', 'ReviewSystemEnhanced.js');
+let reviewText = fs.readFileSync(reviewPath, 'utf8');
+const oldReviewLoader = `const loadGoogleReviews = async () => {\n    setIsLoading(true);\n    try {\n      const response = await axios.get(\`${'${API}'}/google-reviews\`, { timeout: 4500, headers: { Accept: 'application/json' } });\n      setGoogleData(response.data || null);\n    } catch (error) {\n      console.error('Unable to load Google reviews:', error);\n      setGoogleData({ configured: false, error: 'google_reviews_unavailable' });\n    } finally {\n      setIsLoading(false);\n    }\n  };`;
+const newReviewLoader = `const loadGoogleReviews = async () => {\n    setIsLoading(true);\n    const maxAttempts = 4;\n    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {\n      try {\n        const response = await axios.get(\`${'${API}'}/google-reviews\`, { timeout: 15000, headers: { Accept: 'application/json' } });\n        setGoogleData(response.data || null);\n        setIsLoading(false);\n        return;\n      } catch (error) {\n        console.error(\`Unable to load Google reviews (attempt ${'${attempt}'}/${'${maxAttempts}'}):\`, error);\n        if (attempt < maxAttempts) await new Promise((resolve) => setTimeout(resolve, 3000));\n      }\n    }\n    setGoogleData({ configured: false, error: 'google_reviews_unavailable' });\n    setIsLoading(false);\n  };`;
+if (reviewText.includes(oldReviewLoader)) {
+  reviewText = reviewText.replace(oldReviewLoader, newReviewLoader);
+}
+reviewText = reviewText.replace('const timer = setTimeout(loadGoogleReviews, 1200);', 'const timer = setTimeout(loadGoogleReviews, 3000);');
+
 // Patch the separate About Us page too. Keep all links tied to the same verified Place ID.
 const aboutPath = path.join(__dirname, '..', 'src', 'components', 'AboutUsPage.js');
 let aboutText = fs.readFileSync(aboutPath, 'utf8');
@@ -58,5 +68,6 @@ aboutText = aboutText.replaceAll(
 );
 
 fs.writeFileSync(appPath, text, 'utf8');
+fs.writeFileSync(reviewPath, reviewText, 'utf8');
 fs.writeFileSync(aboutPath, aboutText, 'utf8');
-console.log('Google store wiring applied: exact coordinates + Place ID for directions/profile; product loading retries silently during backend cold starts.');
+console.log('Google store wiring applied: exact coordinates + Place ID; product and review loading now retry silently during backend cold starts.');
