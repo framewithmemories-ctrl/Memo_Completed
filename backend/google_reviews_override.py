@@ -10,7 +10,6 @@ import os
 from datetime import datetime, timezone
 
 import httpx
-from fastapi import HTTPException
 
 from server import app, db
 
@@ -41,6 +40,7 @@ async def google_reviews():
             "total": 0,
             "google_url": google_url,
             "reviews": [],
+            "error": "missing_google_places_api_key",
         }
 
     now = datetime.now(timezone.utc)
@@ -59,6 +59,7 @@ async def google_reviews():
                     "reviews": cache.get("reviews", []),
                     "cached": True,
                     "fetched_at": fetched_at.isoformat(),
+                    "review_order": "Google relevance order",
                 }
         except Exception:
             pass
@@ -93,11 +94,13 @@ async def google_reviews():
                 continue
             reviews.append({
                 "author_name": author.get("displayName", "Google customer"),
+                "author_uri": author.get("uri", ""),
                 "rating": review.get("rating", 0),
                 "text": text,
                 "relative_time": review.get("relativePublishTimeDescription", ""),
                 "profile_photo_url": author.get("photoUri", ""),
                 "google_review_url": review.get("googleMapsUri", google_url),
+                "flag_content_uri": review.get("flagContentUri", ""),
             })
 
         payload = {
@@ -118,6 +121,7 @@ async def google_reviews():
             "reviews": reviews,
             "cached": False,
             "fetched_at": now.isoformat(),
+            "review_order": "Google relevance order",
         }
     except Exception:
         # Do not silently fall back to fabricated content. Remove expired data
