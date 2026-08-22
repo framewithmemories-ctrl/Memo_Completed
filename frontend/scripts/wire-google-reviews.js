@@ -4,13 +4,6 @@ const path = require('path');
 const appPath = path.join(__dirname, '..', 'src', 'App.js');
 let text = fs.readFileSync(appPath, 'utf8');
 
-const start = text.indexOf('const TestimonialsSection = () => {');
-const endMarker = '\n\nconst Home = () => {';
-const end = text.indexOf(endMarker, start);
-if (start === -1 || end === -1) {
-  throw new Error('Legacy TestimonialsSection block not found; refusing to modify App.js.');
-}
-
 // Route store links to the actual Memories Google Business Profile, never the nearby Plus Code.
 const plusCodeUrls = [
   'https://maps.google.com/?q=32J2%2BPJ+Coimbatore,+Tamil+Nadu',
@@ -21,7 +14,16 @@ for (const plusCodeUrl of plusCodeUrls) {
   text = text.replaceAll(plusCodeUrl, businessProfileUrl);
 }
 
-const replacement = `const TestimonialsSection = () => null;`;
-text = text.slice(0, start) + replacement + text.slice(end);
+// The source App.js is now clean and no longer contains the legacy testimonials block.
+// Do not fail the production build when that block is absent.
+const start = text.indexOf('const TestimonialsSection = () => {');
+const endMarker = '\n\nconst Home = () => {';
+if (start !== -1) {
+  const end = text.indexOf(endMarker, start);
+  if (end !== -1) {
+    text = text.slice(0, start) + 'const TestimonialsSection = () => null;' + text.slice(end);
+  }
+}
+
 fs.writeFileSync(appPath, text, 'utf8');
-console.log('Google store/review wiring applied: store links use the Memories Business Profile and legacy sample testimonials are disabled.');
+console.log('Google store/review wiring applied: store links use the Memories Business Profile; no legacy testimonial build failure.');
