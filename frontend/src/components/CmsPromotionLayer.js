@@ -33,6 +33,27 @@ function hideLegacyWelcomePopup() {
   }
 }
 
+function applyAnnouncementBanner(text) {
+  if (!text || !text.trim()) return;
+
+  const legacyTexts = [
+    "🎉 Grand Opening Offer: 25% OFF All Frames + Free Home Delivery! 🎉",
+    "Grand Opening Offer: 25% OFF All Frames + Free Home Delivery!"
+  ];
+
+  const elements = Array.from(document.querySelectorAll("body *"));
+  elements.forEach((el) => {
+    if (el.getAttribute("data-cms-announcement-banner") === "true") return;
+    const current = (el.textContent || "").replace(/\s+/g, " ").trim();
+    if (!legacyTexts.some((legacy) => current === legacy)) return;
+
+    // Only replace the leaf text element, not its surrounding hero section.
+    if (el.children.length > 0) return;
+    el.textContent = text.trim();
+    el.setAttribute("data-cms-announcement-banner", "true");
+  });
+}
+
 export default function CmsPromotionLayer() {
   const [cms, setCms] = useState(null);
   const [open, setOpen] = useState(false);
@@ -41,7 +62,13 @@ export default function CmsPromotionLayer() {
   useEffect(() => {
     // Hide the old hard-coded welcome popup immediately and keep it hidden.
     hideLegacyWelcomePopup();
-    const observer = new MutationObserver(() => hideLegacyWelcomePopup());
+
+    let latestCms = null;
+    const observer = new MutationObserver(() => {
+      hideLegacyWelcomePopup();
+      const announcement = latestCms?.announcement?.announcement_text;
+      if (announcement) applyAnnouncementBanner(announcement);
+    });
     observer.observe(document.body, { childList: true, subtree: true });
 
     let cancelled = false;
@@ -51,7 +78,11 @@ export default function CmsPromotionLayer() {
         const response = await fetch(`${API}/cms`, { headers: { Accept: "application/json" } });
         if (!response.ok) return;
         const data = await response.json();
-        if (!cancelled) setCms(data);
+        latestCms = data;
+        if (!cancelled) {
+          setCms(data);
+          applyAnnouncementBanner(data?.announcement?.announcement_text || "");
+        }
       } catch (error) {
         console.warn("CMS promotion load failed", error);
       }
