@@ -13,6 +13,7 @@ from server import app
 import admin_boot  # noqa: F401,E402
 import catalogue_audit  # noqa: F401,E402
 import important_events  # noqa: F401,E402
+import google_reviews_override  # noqa: F401,E402
 
 # Be resilient to Vercel preview/production domains when CORS_ORIGINS has not
 # been updated after a frontend deployment. Bearer-token auth does not require
