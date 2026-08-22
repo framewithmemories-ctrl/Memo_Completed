@@ -1,6 +1,7 @@
 import React, { Component, lazy, Suspense } from "react";
 import ReactDOM from "react-dom/client";
 import "./index.css";
+import CmsPromotionLayer from "./components/CmsPromotionLayer";
 
 const App = lazy(() => import("./App"));
 
@@ -57,7 +58,10 @@ root.render(
   <React.StrictMode>
     <RootErrorBoundary>
       <Suspense fallback={<LoadingScreen />}>
-        <App />
+        <>
+          <App />
+          <CmsPromotionLayer />
+        </>
       </Suspense>
     </RootErrorBoundary>
   </React.StrictMode>,
