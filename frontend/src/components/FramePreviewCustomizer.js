@@ -30,8 +30,7 @@ export const FramePreviewCustomizer = () => {
   const fileInputRef = useRef(null);
 
   useEffect(() => {
-    const handleOpen = (event) => {
-      const detail = event.detail || {};
+    const openPreview = (detail = {}) => {
       setSuggestion(detail.suggestion || null);
       setImageUrl(detail.previewPhoto?.url || detail.suggestion?.image_url || "");
       setBorderWidth(18);
@@ -42,8 +41,30 @@ export const FramePreviewCustomizer = () => {
       setOpen(true);
     };
 
+    const handleOpen = (event) => openPreview(event.detail || {});
+
+    const handleEntryPointClick = (event) => {
+      const target = event.target?.closest?.("a[href='#customizer'], button");
+      if (!target) return;
+
+      const text = (target.textContent || "").replace(/\s+/g, " ").trim().toLowerCase();
+      const isCustomizerLink = target.matches("a[href='#customizer']");
+      const isCreateButton = /^(start creating now|customize|create now|start creating)$/.test(text);
+
+      if (!isCustomizerLink && !isCreateButton) return;
+
+      event.preventDefault();
+      event.stopPropagation();
+      openPreview();
+    };
+
     window.addEventListener("memories:customize-frame", handleOpen);
-    return () => window.removeEventListener("memories:customize-frame", handleOpen);
+    document.addEventListener("click", handleEntryPointClick, true);
+
+    return () => {
+      window.removeEventListener("memories:customize-frame", handleOpen);
+      document.removeEventListener("click", handleEntryPointClick, true);
+    };
   }, []);
 
   const detectOrientation = (width, height) => {
