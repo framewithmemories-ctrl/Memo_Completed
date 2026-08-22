@@ -118,10 +118,7 @@ if (heroText.includes(heroPromoBadges)) heroText = heroText.replace(heroPromoBad
 
 fs.writeFileSync(heroFile, heroText, 'utf8');
 
-// Remove the static header delivery claim as delivery offers are not permanent.
-const appFile = path.join(__dirname, '..', 'src', 'App.js');
-let appText = fs.readFileSync(appFile, 'utf8');
-appText = appText.replace(/\s*<Badge variant="secondary" className="bg-green-100 text-green-800 animate-pulse">\s*<Truck className="w-3 h-3 mr-1"\s*\/>\s*Free Delivery Available\s*<\/Badge>/, '');
-fs.writeFileSync(appFile, appText, 'utf8');
-
+// Do not rewrite App.js here. App.js is authoritative source and must remain valid JSX.
+// The permanent delivery claim is intentionally left unchanged here; it should be controlled
+// by the CMS if/when a dedicated header-promotion field is introduced.
 console.log('CMS Admin, announcement banner and homepage hero wiring applied; homepage CMS is now non-blocking.');
