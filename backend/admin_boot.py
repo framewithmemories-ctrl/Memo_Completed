@@ -6,6 +6,10 @@ from fastapi import Form, HTTPException
 from fastapi.responses import HTMLResponse
 from server import app, db, hash_password
 
+# Register production Google Reviews endpoint after server.py so the legacy
+# placeholder route is removed and replaced by the real Places API handler.
+import google_reviews_override  # noqa: F401,E402
+
 # Register admin-only catalogue audit/media routes on the same FastAPI app.
 import catalogue_audit  # noqa: F401,E402
 import important_events  # noqa: F401,E402
