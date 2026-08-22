@@ -4,8 +4,8 @@ const path = require('path');
 const appPath = path.join(__dirname, '..', 'src', 'App.js');
 let text = fs.readFileSync(appPath, 'utf8');
 
-// The legacy TestimonialsSection contained invented sample testimonials. The live
-// ReviewSystemEnhanced section above it is the single source for genuine Google reviews.
+// Build-time safety wiring: only the genuine Google review component is rendered.
+// The source file remains unchanged so this is repeatable on every clean deployment.
 const start = text.indexOf('const TestimonialsSection = () => {');
 const endMarker = '\n\nconst Home = () => {';
 const end = text.indexOf(endMarker, start);
