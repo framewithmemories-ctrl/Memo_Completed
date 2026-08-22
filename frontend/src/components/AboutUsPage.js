@@ -21,6 +21,13 @@ import {
   ArrowLeft
 } from "lucide-react";
 
+// Google Business Profile / Places ID supplied by the live Google review integration.
+// Using Google's place_id-aware Maps URLs prevents the old nearby Plus Code from being used.
+const GOOGLE_PLACE_ID = "ChIJ9dQb1b33qDsRTLJ9I1nkuqo";
+const GOOGLE_STORE_QUERY = "Memories Photo Frames & Customized Gift Shop, Coimbatore";
+const GOOGLE_STORE_PROFILE_URL = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(GOOGLE_STORE_QUERY)}&query_place_id=${GOOGLE_PLACE_ID}`;
+const GOOGLE_STORE_DIRECTIONS_URL = `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(GOOGLE_STORE_QUERY)}&destination_place_id=${GOOGLE_PLACE_ID}`;
+
 const BusinessLogo = ({ size = "w-12 h-12" }) => {
   return (
     <div className={`${size} relative group cursor-pointer`}>
@@ -337,10 +344,17 @@ export const AboutUsPage = () => {
                 </p>
                 <Button 
                   className="mt-4 bg-blue-600 hover:bg-blue-700"
-                  onClick={() => window.open('https://maps.google.com/?q=32J2%2BPJ+Coimbatore,+Tamil+Nadu', '_blank')}
+                  onClick={() => window.open(GOOGLE_STORE_DIRECTIONS_URL, '_blank', 'noopener,noreferrer')}
                 >
                   <MapPin className="w-4 h-4 mr-2" />
                   Get Directions
+                </Button>
+                <Button
+                  variant="outline"
+                  className="mt-3 border-gray-500 text-white hover:bg-gray-700"
+                  onClick={() => window.open(GOOGLE_STORE_PROFILE_URL, '_blank', 'noopener,noreferrer')}
+                >
+                  View on Google
                 </Button>
               </CardContent>
             </Card>
