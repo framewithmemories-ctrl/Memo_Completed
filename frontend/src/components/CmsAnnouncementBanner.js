@@ -14,7 +14,7 @@ export default function CmsAnnouncementBanner() {
         if (!response.ok) return;
         const data = await response.json();
         const value = data?.announcement?.announcement_text;
-        if (!cancelled && value) setText(value);
+        if (!cancelled && value) setText(String(value).trim());
       } catch (error) {
         console.warn("CMS announcement load failed", error);
       }
@@ -23,6 +23,15 @@ export default function CmsAnnouncementBanner() {
     return () => { cancelled = true; };
   }, []);
 
-  // Keep the existing banner layout, but make its text CMS-controlled.
-  return <span>{text || "🎉 Grand Opening Offer: 25% OFF All Frames + Free Home Delivery! 🎉"}</span>;
+  // Keep the banner's height stable while CMS data loads. The previous
+  // implementation returned a changing-width/height span, which made the
+  // announcement bar collapse and expand as the homepage hydrated.
+  return (
+    <span
+      className="inline-flex min-h-[20px] items-center justify-center leading-5"
+      aria-live="polite"
+    >
+      {text || "\u00a0"}
+    </span>
+  );
 }
