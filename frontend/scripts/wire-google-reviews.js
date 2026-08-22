@@ -5,13 +5,16 @@ const appPath = path.join(__dirname, '..', 'src', 'App.js');
 let text = fs.readFileSync(appPath, 'utf8');
 
 // Use the verified Google Business Profile Place ID returned by the live review integration.
-// Google recommends Maps URLs with a query + place ID for exact place details and directions.
+// For directions, use the verified listing coordinates as the destination query together with
+// the Place ID. This prevents Google's address search from resolving the shop to a different pin.
 const GOOGLE_PLACE_ID = 'ChIJ9dQb1b33qDsRTLJ9I1nkuqo';
+const GOOGLE_STORE_NAME = 'Memories Frames & Gift Shop';
 const GOOGLE_STORE_QUERY = 'Memories Frames & Gift Shop, 19 B KANNI NILLAM, Keeranatham Rd, near RUBY SCHOOL, Saravanampatti, Coimbatore, Tamil Nadu 641035';
-const GOOGLE_STORE_PROFILE_URL = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(GOOGLE_STORE_QUERY)}&query_place_id=${GOOGLE_PLACE_ID}`;
-const GOOGLE_STORE_DIRECTIONS_URL = `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(GOOGLE_STORE_QUERY)}&destination_place_id=${GOOGLE_PLACE_ID}`;
+const GOOGLE_STORE_COORDS = '11.0755,76.9983';
+const GOOGLE_STORE_PROFILE_URL = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(GOOGLE_STORE_NAME)}&query_place_id=${GOOGLE_PLACE_ID}`;
+const GOOGLE_STORE_DIRECTIONS_URL = `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(GOOGLE_STORE_COORDS)}&destination_place_id=${GOOGLE_PLACE_ID}&travelmode=driving`;
 
-// Remove the old nearby Plus Code and stale hand-built Google Maps place URL from the homepage/footer.
+// Remove old nearby Plus Code and stale hand-built Google Maps URLs from the homepage/footer.
 const oldStoreUrls = [
   'https://maps.google.com/?q=32J2%2BPJ+Coimbatore,+Tamil+Nadu',
   'https://maps.google.com/?q=32J2+PJ+Coimbatore,+Tamil+Nadu',
@@ -21,11 +24,25 @@ for (const oldUrl of oldStoreUrls) {
   text = text.replaceAll(oldUrl, GOOGLE_STORE_PROFILE_URL);
 }
 
-// Patch the separate About Us page too. Keep its links tied to the same verified Place ID.
+// Replace the old homepage/footer Visit Our Store handler with the same verified profile URL.
+text = text.replace(
+  /onClick=\{\(\) => window\.open\('https:\/\/www\.google\.com\/maps\/place\/Memories[^']*', '_blank'\)\}/,
+  "onClick={() => { window.location.href = GOOGLE_STORE_PROFILE_URL; }}"
+);
+
+// Make the initial product request tolerant of a sleeping backend. The old 6-second request
+// produced a user-facing toast during normal backend cold starts. Retry silently instead.
+const oldProductFetch = `const fetchProducts = async () => {\n      try {\n        const response = await axios.get(\`${'${API}'}/products\`, { timeout: 6000 });\n        if (!cancelled) setProducts(Array.isArray(response.data) ? response.data : []);\n      } catch (error) {\n        console.error('Error fetching products:', error);\n        if (!cancelled) toast.error(\"Products are taking longer to load. You can still browse and call us!\");\n      } finally {\n        if (!cancelled) setLoading(false);\n      }\n    };`;
+const newProductFetch = `const fetchProducts = async () => {\n      const maxAttempts = 4;\n      for (let attempt = 1; attempt <= maxAttempts && !cancelled; attempt += 1) {\n        try {\n          const response = await axios.get(\`${'${API}'}/products\`, { timeout: 20000 });\n          if (!cancelled) setProducts(Array.isArray(response.data) ? response.data : []);\n          if (!cancelled) setLoading(false);\n          return;\n        } catch (error) {\n          console.error(\`Error fetching products (attempt ${'${attempt}'}/${'${maxAttempts}'}):\`, error);\n          if (attempt < maxAttempts) await new Promise((resolve) => setTimeout(resolve, 2500));\n        }\n      }\n      if (!cancelled) setLoading(false);\n    };`;
+if (text.includes(oldProductFetch)) {
+  text = text.replace(oldProductFetch, newProductFetch);
+}
+
+// Patch the separate About Us page too. Keep all links tied to the same verified Place ID.
 const aboutPath = path.join(__dirname, '..', 'src', 'components', 'AboutUsPage.js');
 let aboutText = fs.readFileSync(aboutPath, 'utf8');
 const constantsPattern = /const GOOGLE_PLACE_ID = .*?;\nconst GOOGLE_STORE_QUERY = .*?;\nconst GOOGLE_STORE_PROFILE_URL = .*?;\nconst GOOGLE_STORE_DIRECTIONS_URL = .*?;/s;
-const constantsReplacement = `const GOOGLE_PLACE_ID = "${GOOGLE_PLACE_ID}";\nconst GOOGLE_STORE_QUERY = "${GOOGLE_STORE_QUERY}";\nconst GOOGLE_STORE_PROFILE_URL = \`https://www.google.com/maps/search/?api=1&query=\${encodeURIComponent(GOOGLE_STORE_QUERY)}&query_place_id=\${GOOGLE_PLACE_ID}\`;\nconst GOOGLE_STORE_DIRECTIONS_URL = \`https://www.google.com/maps/dir/?api=1&destination=\${encodeURIComponent(GOOGLE_STORE_QUERY)}&destination_place_id=\${GOOGLE_PLACE_ID}\`;`;
+const constantsReplacement = `const GOOGLE_PLACE_ID = "${GOOGLE_PLACE_ID}";\nconst GOOGLE_STORE_NAME = "${GOOGLE_STORE_NAME}";\nconst GOOGLE_STORE_QUERY = "${GOOGLE_STORE_QUERY}";\nconst GOOGLE_STORE_COORDS = "${GOOGLE_STORE_COORDS}";\nconst GOOGLE_STORE_PROFILE_URL = \`https://www.google.com/maps/search/?api=1&query=\${encodeURIComponent(GOOGLE_STORE_NAME)}&query_place_id=\${GOOGLE_PLACE_ID}\`;\nconst GOOGLE_STORE_DIRECTIONS_URL = \`https://www.google.com/maps/dir/?api=1&destination=\${encodeURIComponent(GOOGLE_STORE_COORDS)}&destination_place_id=\${GOOGLE_PLACE_ID}&travelmode=driving\`;`;
 if (constantsPattern.test(aboutText)) {
   aboutText = aboutText.replace(constantsPattern, constantsReplacement);
 }
@@ -42,4 +59,4 @@ aboutText = aboutText.replaceAll(
 
 fs.writeFileSync(appPath, text, 'utf8');
 fs.writeFileSync(aboutPath, aboutText, 'utf8');
-console.log('Google store wiring applied: exact verified Place ID used for homepage/footer/About Us directions and store links.');
+console.log('Google store wiring applied: exact coordinates + Place ID for directions/profile; product loading retries silently during backend cold starts.');
