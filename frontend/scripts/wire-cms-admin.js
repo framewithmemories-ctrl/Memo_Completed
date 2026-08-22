@@ -87,5 +87,19 @@ if (!heroText.includes('{cmsHero.hero_subtitle ||')) {
   throw new Error('CMS homepage subtitle wiring verification failed');
 }
 
+// Remove the non-CMS promotional badges around the hero image. Discounts and delivery
+// offers should only appear when intentionally configured as a current promotion.
+const heroPromoBadges = '<div className="absolute -top-6 -right-6 w-20 h-20 bg-gradient-to-br from-yellow-400 to-orange-500 rounded-full flex items-center justify-center shadow-xl animate-bounce"><span className="text-white font-bold text-sm">25% OFF</span></div><div className="absolute -bottom-6 -left-6 w-24 h-24 bg-gradient-to-br from-green-400 to-emerald-500 rounded-full flex items-center justify-center shadow-xl animate-pulse"><div className="text-center"><div className="text-white font-bold text-xs">FREE</div><div className="text-white font-bold text-xs">DELIVERY</div></div></div>';
+if (heroText.includes(heroPromoBadges)) {
+  heroText = heroText.replace(heroPromoBadges, '');
+}
+
 fs.writeFileSync(heroFile, heroText, 'utf8');
-console.log('CMS Admin, announcement banner and homepage hero wiring applied and verified.');
+
+// Remove the static header delivery claim as delivery offers are not permanent.
+const appFile = path.join(__dirname, '..', 'src', 'App.js');
+let appText = fs.readFileSync(appFile, 'utf8');
+appText = appText.replace(/\s*<Badge variant="secondary" className="bg-green-100 text-green-800 animate-pulse">\s*<Truck className="w-3 h-3 mr-1"\s*\/>\s*Free Delivery Available\s*<\/Badge>/, '');
+fs.writeFileSync(appFile, appText, 'utf8');
+
+console.log('CMS Admin, announcement banner and homepage hero wiring applied; static discount and delivery claims removed.');
