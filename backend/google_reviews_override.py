@@ -1,9 +1,7 @@
-"""Production override for the public Google Reviews endpoint.
+"""Production Google Reviews endpoint.
 
 Uses the Google Places API (New) at request time so the storefront shows
-current first-party Google review content without persisting Google review
-text in MongoDB. The place ID itself is safe to configure as an environment
-variable; the API key remains server-side on Render.
+current first-party Google review content. The API key stays server-side.
 """
 
 import os
@@ -23,10 +21,20 @@ def _google_reviews_url(place_id: str) -> str:
     return configured or f"https://search.google.com/local/reviews?placeid={place_id}"
 
 
+def _api_key() -> str:
+    # Accept the common names so a correctly configured Render secret is not
+    # ignored simply because it was named GOOGLE_API_KEY or GOOGLE_MAPS_API_KEY.
+    for name in ("GOOGLE_PLACES_API_KEY", "GOOGLE_API_KEY", "GOOGLE_MAPS_API_KEY"):
+        value = os.environ.get(name, "").strip()
+        if value:
+            return value
+    return ""
+
+
 @app.get("/api/google-reviews")
 async def google_reviews():
     """Return current genuine Google reviews from the configured Place ID."""
-    api_key = os.environ.get("GOOGLE_PLACES_API_KEY", "").strip()
+    api_key = _api_key()
     place_id = os.environ.get("GOOGLE_PLACE_ID", "").strip() or GOOGLE_PLACE_ID
     google_url = _google_reviews_url(place_id)
 
@@ -38,6 +46,7 @@ async def google_reviews():
             "google_url": google_url,
             "reviews": [],
             "error": "missing_google_places_api_key",
+            "configuration_hint": "Set GOOGLE_PLACES_API_KEY on the backend service.",
         }
 
     try:
@@ -46,10 +55,15 @@ async def google_reviews():
             "X-Goog-Api-Key": api_key,
             "X-Goog-FieldMask": "rating,userRatingCount,reviews,googleMapsUri",
         }
-        async with httpx.AsyncClient(timeout=4.0) as client:
+        async with httpx.AsyncClient(timeout=6.0) as client:
             response = await client.get(endpoint, headers=headers)
 
         if response.status_code != 200:
+            detail = ""
+            try:
+                detail = response.json().get("error", {}).get("message", "")
+            except Exception:
+                pass
             return {
                 "configured": False,
                 "rating": 0,
@@ -57,6 +71,7 @@ async def google_reviews():
                 "google_url": google_url,
                 "reviews": [],
                 "error": f"google_http_{response.status_code}",
+                "detail": detail,
             }
 
         result = response.json()
