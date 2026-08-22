@@ -66,3 +66,55 @@ img[src] { opacity: 1; transform: scale(1); }
 
 /* The legacy TestimonialsSection contained hard-coded sample reviews. Hide it so only genuine Google reviews are shown. */
 section.py-20.bg-gradient-to-br.from-rose-50.to-pink-50 { display: none !important; }
+
+/* Header responsive fix: keep the desktop search available below 2xl without allowing it to collide with navigation. */
+@media (min-width: 1280px) {
+  header.sticky > div.max-w-7xl > div.h-16 > div:last-child > div:first-child {
+    display: block !important;
+    width: clamp(170px, 18vw, 224px) !important;
+    flex: 0 1 clamp(170px, 18vw, 224px) !important;
+    min-width: 170px;
+  }
+
+  header.sticky > div.max-w-7xl > div.h-16 > div:last-child {
+    column-gap: 8px;
+  }
+
+  header.sticky > div.max-w-7xl > div.h-16 > div:last-child > * + * {
+    margin-inline-start: 0 !important;
+  }
+
+  header.sticky > div.max-w-7xl > div.h-16 > div:first-child {
+    min-width: 0;
+  }
+
+  header.sticky > div.max-w-7xl > div.h-16 > div:first-child > nav {
+    column-gap: 12px;
+  }
+
+  header.sticky > div.max-w-7xl > div.h-16 > div:first-child > nav > * {
+    flex-shrink: 0;
+  }
+}
+
+/* Between xl and 2xl there is not enough room for the optional Gift Wrap badge once search is restored. */
+@media (min-width: 1280px) and (max-width: 1599px) {
+  header.sticky > div.max-w-7xl > div.h-16 > div:last-child > div:nth-child(2) {
+    display: none !important;
+  }
+
+  header.sticky > div.max-w-7xl > div.h-16 > div:last-child {
+    column-gap: 6px;
+  }
+
+  header.sticky > div.max-w-7xl > div.h-16 > div:first-child > nav {
+    column-gap: 10px;
+  }
+}
+
+/* Give the full desktop header a little more breathing room on wide screens while retaining the existing centered layout. */
+@media (min-width: 1600px) {
+  header.sticky > div.max-w-7xl {
+    max-width: 1440px;
+  }
+}
