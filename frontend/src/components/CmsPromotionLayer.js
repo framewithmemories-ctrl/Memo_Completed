@@ -39,10 +39,16 @@ export default function CmsPromotionLayer() {
   const [dismissed, setDismissed] = useState(false);
 
   useEffect(() => {
+    // Hide the old hard-coded welcome popup immediately and keep it hidden.
+    hideLegacyWelcomePopup();
+    const observer = new MutationObserver(() => hideLegacyWelcomePopup());
+    observer.observe(document.body, { childList: true, subtree: true });
+
     let cancelled = false;
     const load = async () => {
       try {
-        const response = await fetch(`${API}/admin/cms`, { headers: { Accept: "application/json" } });
+        // /admin/cms requires admin authentication. /cms is the public storefront endpoint.
+        const response = await fetch(`${API}/cms`, { headers: { Accept: "application/json" } });
         if (!response.ok) return;
         const data = await response.json();
         if (!cancelled) setCms(data);
@@ -51,7 +57,11 @@ export default function CmsPromotionLayer() {
       }
     };
     load();
-    return () => { cancelled = true; };
+
+    return () => {
+      cancelled = true;
+      observer.disconnect();
+    };
   }, []);
 
   const offer = useMemo(() => {
@@ -61,20 +71,14 @@ export default function CmsPromotionLayer() {
 
   useEffect(() => {
     if (!offer) return undefined;
-    hideLegacyWelcomePopup();
-    const observer = new MutationObserver(() => hideLegacyWelcomePopup());
-    observer.observe(document.body, { childList: true, subtree: true });
 
     const key = `cms_offer_popup_seen_${offer.id || offer._id || offer.title || "current"}`;
     const alreadySeen = localStorage.getItem(key) === "1";
     if (!alreadySeen) {
       const timer = window.setTimeout(() => setOpen(true), 800);
-      return () => {
-        window.clearTimeout(timer);
-        observer.disconnect();
-      };
+      return () => window.clearTimeout(timer);
     }
-    return () => observer.disconnect();
+    return undefined;
   }, [offer]);
 
   if (!offer || !open || dismissed) return null;
@@ -83,7 +87,6 @@ export default function CmsPromotionLayer() {
     setOpen(false);
     setDismissed(true);
     localStorage.setItem(`cms_offer_popup_seen_${offer.id || offer._id || offer.title || "current"}`, "1");
-    hideLegacyWelcomePopup();
   };
 
   return (
