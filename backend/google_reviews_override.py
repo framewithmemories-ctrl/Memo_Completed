@@ -5,12 +5,15 @@ current first-party Google review content. The API key stays server-side.
 """
 
 import os
+import time
 
 import httpx
 
 from server import app
 
 GOOGLE_PLACE_ID = os.environ.get("GOOGLE_PLACE_ID", "").strip() or "ChIJ9dQb1b33qDsRTLJ9I1nkuqo"
+GOOGLE_REVIEWS_CACHE_TTL = 600  # 10 minutes; keeps repeated page loads fast while warm.
+_reviews_cache = {}
 
 # Remove the legacy /api/google-reviews handler before registering the real one.
 app.router.routes = [route for route in app.router.routes if route.path != "/api/google-reviews"]
@@ -49,13 +52,18 @@ async def google_reviews():
             "configuration_hint": "Set GOOGLE_PLACES_API_KEY on the backend service.",
         }
 
+    cache_key = place_id
+    cached = _reviews_cache.get(cache_key)
+    if cached and time.monotonic() - cached["timestamp"] < GOOGLE_REVIEWS_CACHE_TTL:
+        return {**cached["data"], "cached": True}
+
     try:
         endpoint = f"https://places.googleapis.com/v1/places/{place_id}"
         headers = {
             "X-Goog-Api-Key": api_key,
             "X-Goog-FieldMask": "rating,userRatingCount,reviews,googleMapsUri",
         }
-        async with httpx.AsyncClient(timeout=6.0) as client:
+        async with httpx.AsyncClient(timeout=10.0) as client:
             response = await client.get(endpoint, headers=headers)
 
         if response.status_code != 200:
@@ -93,7 +101,7 @@ async def google_reviews():
                 "flag_content_uri": review.get("flagContentUri", ""),
             })
 
-        return {
+        data = {
             "configured": True,
             "rating": result.get("rating", 0),
             "total": result.get("userRatingCount", 0),
@@ -102,6 +110,8 @@ async def google_reviews():
             "cached": False,
             "review_order": "Google relevance order",
         }
+        _reviews_cache[cache_key] = {"timestamp": time.monotonic(), "data": data}
+        return data
     except Exception:
         return {
             "configured": False,
