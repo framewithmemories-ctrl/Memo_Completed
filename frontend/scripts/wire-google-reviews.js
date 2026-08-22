@@ -5,14 +5,15 @@ const appPath = path.join(__dirname, '..', 'src', 'App.js');
 let text = fs.readFileSync(appPath, 'utf8');
 
 // Use the verified Google Business Profile Place ID returned by the live review integration.
-// For directions, use the verified listing coordinates as the destination query together with
-// the Place ID. This prevents Google's address search from resolving the shop to a different pin.
+// The safest customer-facing destination is the verified Google Business Profile itself.
+// Google Maps can reinterpret direct directions URLs, so both "Visit Store" and "Get Directions"
+// intentionally open the same verified profile and let Google provide the Directions action.
 const GOOGLE_PLACE_ID = 'ChIJ9dQb1b33qDsRTLJ9I1nkuqo';
 const GOOGLE_STORE_NAME = 'Memories Frames & Gift Shop';
 const GOOGLE_STORE_QUERY = 'Memories Frames & Gift Shop, 19 B KANNI NILLAM, Keeranatham Rd, near RUBY SCHOOL, Saravanampatti, Coimbatore, Tamil Nadu 641035';
 const GOOGLE_STORE_COORDS = '11.0755,76.9983';
 const GOOGLE_STORE_PROFILE_URL = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(GOOGLE_STORE_NAME)}&query_place_id=${GOOGLE_PLACE_ID}`;
-const GOOGLE_STORE_DIRECTIONS_URL = `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(GOOGLE_STORE_COORDS)}&destination_place_id=${GOOGLE_PLACE_ID}&travelmode=driving`;
+const GOOGLE_STORE_DIRECTIONS_URL = GOOGLE_STORE_PROFILE_URL;
 
 // Remove old nearby Plus Code and stale hand-built Google Maps URLs from the homepage/footer.
 const oldStoreUrls = [
@@ -48,11 +49,11 @@ if (reviewText.includes(oldReviewLoader)) {
 }
 reviewText = reviewText.replace('const timer = setTimeout(loadGoogleReviews, 1200);', 'const timer = setTimeout(loadGoogleReviews, 3000);');
 
-// Patch the separate About Us page too. Keep all links tied to the same verified Place ID.
+// Patch the separate About Us page too. Keep all store-location actions tied to the same verified profile.
 const aboutPath = path.join(__dirname, '..', 'src', 'components', 'AboutUsPage.js');
 let aboutText = fs.readFileSync(aboutPath, 'utf8');
 const constantsPattern = /const GOOGLE_PLACE_ID = .*?;\nconst GOOGLE_STORE_QUERY = .*?;\nconst GOOGLE_STORE_PROFILE_URL = .*?;\nconst GOOGLE_STORE_DIRECTIONS_URL = .*?;/s;
-const constantsReplacement = `const GOOGLE_PLACE_ID = "${GOOGLE_PLACE_ID}";\nconst GOOGLE_STORE_NAME = "${GOOGLE_STORE_NAME}";\nconst GOOGLE_STORE_QUERY = "${GOOGLE_STORE_QUERY}";\nconst GOOGLE_STORE_COORDS = "${GOOGLE_STORE_COORDS}";\nconst GOOGLE_STORE_PROFILE_URL = \`https://www.google.com/maps/search/?api=1&query=\${encodeURIComponent(GOOGLE_STORE_NAME)}&query_place_id=\${GOOGLE_PLACE_ID}\`;\nconst GOOGLE_STORE_DIRECTIONS_URL = \`https://www.google.com/maps/dir/?api=1&destination=\${encodeURIComponent(GOOGLE_STORE_COORDS)}&destination_place_id=\${GOOGLE_PLACE_ID}&travelmode=driving\`;`;
+const constantsReplacement = `const GOOGLE_PLACE_ID = "${GOOGLE_PLACE_ID}";\nconst GOOGLE_STORE_NAME = "${GOOGLE_STORE_NAME}";\nconst GOOGLE_STORE_QUERY = "${GOOGLE_STORE_QUERY}";\nconst GOOGLE_STORE_COORDS = "${GOOGLE_STORE_COORDS}";\nconst GOOGLE_STORE_PROFILE_URL = \`https://www.google.com/maps/search/?api=1&query=\${encodeURIComponent(GOOGLE_STORE_NAME)}&query_place_id=\${GOOGLE_PLACE_ID}\`;\nconst GOOGLE_STORE_DIRECTIONS_URL = GOOGLE_STORE_PROFILE_URL;`;
 if (constantsPattern.test(aboutText)) {
   aboutText = aboutText.replace(constantsPattern, constantsReplacement);
 }
@@ -70,4 +71,4 @@ aboutText = aboutText.replaceAll(
 fs.writeFileSync(appPath, text, 'utf8');
 fs.writeFileSync(reviewPath, reviewText, 'utf8');
 fs.writeFileSync(aboutPath, aboutText, 'utf8');
-console.log('Google store wiring applied: exact coordinates + Place ID; product and review loading now retry silently during backend cold starts.');
+console.log('Google store wiring applied: all location actions use the verified Google Business Profile; product and review loading retry silently during backend cold starts.');
