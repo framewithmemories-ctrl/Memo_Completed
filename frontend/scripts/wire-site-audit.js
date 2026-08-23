@@ -7,16 +7,14 @@ const mainPath = path.join(root, 'src', 'components', 'MainComponents.js');
 
 const PROFILE_URL = 'https://www.google.com/maps/search/?api=1&query=Memories%20Photo%20Frames%20%26%20Customized%20Gift%20Shop%2C%20Coimbatore&query_place_id=ChIJ9dQb1b33qDsRTLJ9I1nkuqo';
 const INSTAGRAM_URL = 'https://www.instagram.com/memories.framedwithlove/';
-const FACEBOOK_URL = 'https://www.facebook.com/MemoriesFramedwithlove';
-
-function replaceOrFail(text, from, to, label) {
-  if (!text.includes(from)) throw new Error(`Audit patch target not found: ${label}`);
-  return text.replace(from, to);
-}
+const FACEBOOK_URL = 'https://www.facebook.com/profile.php?id=100073320994935';
 
 let app = fs.readFileSync(appPath, 'utf8');
 app = app.replace(/https:\/\/instagram\.com\/memories_photoframes/g, INSTAGRAM_URL);
+app = app.replace(/https:\/\/www\.facebook\.com\/MemoriesFramedwithlove/g, FACEBOOK_URL);
 app = app.replace(/https:\/\/facebook\.com\/memories\.photoframes/g, FACEBOOK_URL);
+app = app.replace(/https:\/\/www\.facebook\.com\/memories\.photoframes/g, FACEBOOK_URL);
+app = app.replace(/https:\/\/www\.facebook\.com\/profile\.php\?id=100073320994935/g, FACEBOOK_URL);
 app = app.replace(/https:\/\/www\.google\.com\/maps\/place\/Memories[^']+/g, PROFILE_URL);
 app = app.replace(/https:\/\/maps\.google\.com\/\?q=32J2%2BPJ\+Coimbatore,\+Tamil\+Nadu/g, PROFILE_URL);
 
@@ -36,4 +34,4 @@ const staleHeroLoader = `  const getInitialCmsHero = () => {\n    if (typeof win
 if (main.includes(staleHeroLoader)) main = main.replace(staleHeroLoader, '  const getInitialCmsHero = () => CMS_DEFAULT_HERO;');
 fs.writeFileSync(mainPath, main, 'utf8');
 
-console.log('Site audit wiring applied: social links, Google profile navigation, stale CMS prevention, outdated promotional claims, and welcome-popup customize action.');
+console.log('Site audit wiring applied: verified Facebook page, Instagram page, Google profile navigation, stale CMS prevention, outdated promotional claims, and welcome-popup customize action.');
