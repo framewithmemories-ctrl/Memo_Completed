@@ -5,15 +5,12 @@ current first-party Google review content. The API key stays server-side.
 """
 
 import os
-import time
 
 import httpx
 
 from server import app
 
 GOOGLE_PLACE_ID = os.environ.get("GOOGLE_PLACE_ID", "").strip() or "ChIJ9dQb1b33qDsRTLJ9I1nkuqo"
-GOOGLE_REVIEWS_CACHE_TTL = 600  # 10 minutes; keeps repeated page loads fast while warm.
-_reviews_cache = {}
 
 # Remove the legacy /api/google-reviews handler before registering the real one.
 app.router.routes = [route for route in app.router.routes if route.path != "/api/google-reviews"]
@@ -25,8 +22,6 @@ def _google_reviews_url(place_id: str) -> str:
 
 
 def _api_key() -> str:
-    # Accept the common names so a correctly configured Render secret is not
-    # ignored simply because it was named GOOGLE_API_KEY or GOOGLE_MAPS_API_KEY.
     for name in ("GOOGLE_PLACES_API_KEY", "GOOGLE_API_KEY", "GOOGLE_MAPS_API_KEY"):
         value = os.environ.get(name, "").strip()
         if value:
@@ -36,7 +31,7 @@ def _api_key() -> str:
 
 @app.get("/api/google-reviews")
 async def google_reviews():
-    """Return current genuine Google reviews from the configured Place ID."""
+    """Return fresh genuine Google reviews from the configured Place ID."""
     api_key = _api_key()
     place_id = os.environ.get("GOOGLE_PLACE_ID", "").strip() or GOOGLE_PLACE_ID
     google_url = _google_reviews_url(place_id)
@@ -51,11 +46,6 @@ async def google_reviews():
             "error": "missing_google_places_api_key",
             "configuration_hint": "Set GOOGLE_PLACES_API_KEY on the backend service.",
         }
-
-    cache_key = place_id
-    cached = _reviews_cache.get(cache_key)
-    if cached and time.monotonic() - cached["timestamp"] < GOOGLE_REVIEWS_CACHE_TTL:
-        return {**cached["data"], "cached": True}
 
     try:
         endpoint = f"https://places.googleapis.com/v1/places/{place_id}"
@@ -101,7 +91,7 @@ async def google_reviews():
                 "flag_content_uri": review.get("flagContentUri", ""),
             })
 
-        data = {
+        return {
             "configured": True,
             "rating": result.get("rating", 0),
             "total": result.get("userRatingCount", 0),
@@ -110,8 +100,6 @@ async def google_reviews():
             "cached": False,
             "review_order": "Google relevance order",
         }
-        _reviews_cache[cache_key] = {"timestamp": time.monotonic(), "data": data}
-        return data
     except Exception:
         return {
             "configured": False,
