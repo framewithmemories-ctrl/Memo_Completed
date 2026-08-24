@@ -1738,64 +1738,12 @@ async def get_wallet_transactions(user_id: str, limit: int = 50, owner=Depends(v
 
 @api_router.post("/users/{user_id}/wallet/pay")
 async def pay_with_wallet(user_id: str, amount: float, order_id: str, owner=Depends(verify_user_access)):
-    if not math.isfinite(amount) or amount <= 0 or amount > 1_000_000:
-        raise HTTPException(status_code=400, detail="Invalid payment amount")
-
-    # Idempotency: prevent double-deduction for the same order
-    existing = await db.wallet_transactions.find_one(
-        {"user_id": user_id, "order_id": order_id, "type": "debit"}
+    # SECURITY: this endpoint is intentionally disabled until wallet debit, order ownership,
+    # exact server-side order amount, and payment-state changes are committed atomically.
+    raise HTTPException(
+        status_code=403,
+        detail="Wallet payments are temporarily disabled until secure checkout integration is enabled.",
     )
-    if existing:
-        raise HTTPException(status_code=409, detail="Wallet payment already recorded for this order")
-
-    user = await db.users.find_one({"id": user_id})
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
-    
-    current_balance = user.get("wallet_balance", 0.0)
-    if amount > current_balance:
-        raise HTTPException(status_code=400, detail="Insufficient wallet balance")
-    
-    new_balance = current_balance - amount
-    new_total_spent = user.get("total_spent", 0.0) + amount
-    
-    # Update tier based on total spent
-    new_tier = "Silver"
-    if new_total_spent >= 10000:
-        new_tier = "Platinum"
-    elif new_total_spent >= 5000:
-        new_tier = "Gold"
-    
-    # Update user
-    await db.users.update_one(
-        {"id": user_id},
-        {
-            "$set": {
-                "wallet_balance": new_balance,
-                "total_spent": new_total_spent,
-                "tier": new_tier
-            }
-        }
-    )
-    
-    # Record transaction
-    transaction = WalletTransaction(
-        user_id=user_id,
-        type="debit",
-        amount=amount,
-        description=f"Payment for order #{order_id}",
-        category="purchase",
-        order_id=order_id,
-        balance_after=new_balance
-    )
-    await db.wallet_transactions.insert_one(transaction.dict())
-    
-    return {
-        "payment_successful": True,
-        "new_balance": new_balance,
-        "tier": new_tier,
-        "transaction_id": transaction.id
-    }
 
 # ============================ Authentication endpoints ============================
 class RegisterRequest(BaseModel):
