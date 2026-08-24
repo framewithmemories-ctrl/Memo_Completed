@@ -11,7 +11,7 @@ permissions:
   contents: write
 
 jobs:
-  disable-unintegrated-wallet-pay:
+  harden-wallet-safety:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout main
@@ -20,25 +20,35 @@ jobs:
           ref: main
           fetch-depth: 1
 
-      - name: Disable unsafe wallet payment endpoint
+      - name: Harden wallet payment and reward conversion
         run: |
           python - <<'PY'
           from pathlib import Path
 
           path = Path("backend/server.py")
           text = path.read_text(encoding="utf-8")
+          changes = []
+
           start = text.find('@api_router.post("/users/{user_id}/wallet/pay")')
           end = text.find('\n# ============================ Authentication endpoints ============================', start)
           if start == -1 or end == -1:
               raise SystemExit("Could not locate wallet payment endpoint; refusing to patch")
-
           block = text[start:end]
-          if 'Wallet payments are temporarily disabled until secure checkout integration is enabled.' in block:
-              print("Wallet payment endpoint is already disabled")
-          else:
+          if 'Wallet payments are temporarily disabled until secure checkout integration is enabled.' not in block:
               replacement = '''@api_router.post("/users/{user_id}/wallet/pay")\nasync def pay_with_wallet(user_id: str, amount: float, order_id: str, owner=Depends(verify_user_access)):\n    # SECURITY: this endpoint is intentionally disabled until wallet debit, order ownership,\n    # exact server-side order amount, and payment-state changes are committed atomically.\n    raise HTTPException(\n        status_code=403,\n        detail="Wallet payments are temporarily disabled until secure checkout integration is enabled.",\n    )\n'''
-              path.write_text(text[:start] + replacement + text[end:], encoding="utf-8")
-              print("Disabled unintegrated wallet payment endpoint")
+              text = text[:start] + replacement + text[end:]
+              changes.append("disabled unintegrated wallet payment")
+
+          old = '''    # Update user\n    await db.users.update_one(\n        {"id": user_id},\n        {\n            "$set": {\n                "points": new_points,\n                "store_credits": new_store_credits\n            }\n        }\n    )\n    \n    # Record transaction\n    transaction = WalletTransaction('''
+          new = '''    # Atomically spend the points so two concurrent requests cannot convert the same points twice.\n    result = await db.users.update_one(\n        {"id": user_id, "points": {"$gte": points}},\n        {\n            "$inc": {"points": -points, "store_credits": credit_value}\n        }\n    )\n    if result.matched_count != 1:\n        raise HTTPException(status_code=409, detail="Reward points changed. Please refresh and try again.")\n\n    updated_user = await db.users.find_one({"id": user_id})\n    new_points = int(updated_user.get("points", 0) or 0)\n    new_store_credits = float(updated_user.get("store_credits", 0.0) or 0.0)\n\n    # Record transaction\n    transaction = WalletTransaction('''
+          if old in text:
+              text = text.replace(old, new, 1)
+              changes.append("atomic reward-point conversion")
+          elif 'Atomically spend the points so two concurrent requests cannot convert the same points twice.' not in text:
+              raise SystemExit("Could not locate reward conversion update block; refusing to patch")
+
+          path.write_text(text, encoding="utf-8")
+          print("Applied: " + ", ".join(changes) if changes else "No wallet changes needed")
           PY
 
       - name: Validate Python syntax
@@ -50,5 +60,5 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add backend/server.py
           git diff --cached --quiet && echo "No source change needed" && exit 0
-          git commit -m "security: disable unintegrated wallet payment endpoint"
+          git commit -m "security: make reward conversion atomic"
           git push origin main
