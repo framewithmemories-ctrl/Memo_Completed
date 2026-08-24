@@ -20,7 +20,7 @@ jobs:
           ref: main
           fetch-depth: 1
 
-      - name: Harden order and payment ownership and pricing
+      - name: Harden order and payment ownership, pricing, and wallet safety
         run: |
           python - <<'PY'
           from pathlib import Path
@@ -61,19 +61,33 @@ jobs:
           old_pricing = '''        product_id = item.get("product_id") or item.get("id")\n        if product_id:\n            product = await db.products.find_one({"id": product_id})\n            if product:\n                expected_min = float(product.get("base_price", 0))\n                variant_id = item.get("variant_id")\n                if variant_id:\n                    variant = next((v for v in product.get("variants", []) if v.get("id") == variant_id), None)\n                    if not variant:\n                        raise HTTPException(status_code=400, detail="Invalid product variant")\n                    expected_min += float(variant.get("price_delta", 0))\n                if price + 0.01 < expected_min:\n                    raise HTTPException(status_code=400, detail="Item price is below the catalog price")\n        subtotal += price * qty'''
           new_pricing = '''        product_id = item.get("productId") or item.get("product_id")\n        if not product_id:\n            raise HTTPException(status_code=400, detail="Product reference is required for payment")\n        product = await db.products.find_one({"id": product_id})\n        if not product:\n            raise HTTPException(status_code=400, detail="Product not found")\n        status = product.get("status") or {}\n        if status.get("active") is False or status.get("published") is False:\n            raise HTTPException(status_code=400, detail="Product is not available for purchase")\n\n        expected_price = float(product.get("base_price", 0))\n        variant_id = item.get("variantId") or item.get("variant_id")\n        variants = product.get("variants", []) or []\n        if variants:\n            if not variant_id:\n                raise HTTPException(status_code=400, detail="A product option must be selected")\n            variant = next((v for v in variants if v.get("id") == variant_id), None)\n            if not variant:\n                raise HTTPException(status_code=400, detail="Invalid product variant")\n            if variant.get("in_stock") is False:\n                raise HTTPException(status_code=400, detail="Selected product option is out of stock")\n            expected_price += float(variant.get("price_delta", 0))\n        elif variant_id:\n            raise HTTPException(status_code=400, detail="Invalid product variant")\n\n        expected_price = round(expected_price, 2)\n        if abs(price - expected_price) > 0.01:\n            raise HTTPException(status_code=400, detail="Item price does not match the catalog price")\n\n        # Normalize the stored order line to the server price so admin/order history cannot contain a forged price.\n        item["productId"] = product_id\n        item["variantId"] = variant_id\n        item["price"] = expected_price\n        subtotal += expected_price * qty'''
           count = text.count(old_pricing)
-          if count != 1:
+          if count == 1:
+              text = text.replace(old_pricing, new_pricing, 1)
+              changes.append("server-authoritative catalog pricing")
+          elif 'Product reference is required for payment' not in text:
               raise SystemExit(f"Expected exactly one payment pricing block, found {count}; refusing to patch")
-          text = text.replace(old_pricing, new_pricing, 1)
-          changes.append("server-authoritative catalog pricing")
 
-          # Harden the legacy /orders path with the same product reference and exact catalog price rules.
           old_legacy = '''        # Source-of-truth: submitted price cannot be below the catalog base price (+ variant)\n        product_id = item.get("product_id") or item.get("id")\n        if product_id:\n            product = await db.products.find_one({"id": product_id})\n            if product:\n                expected_min = float(product.get("base_price", 0))\n                variant_id = item.get("variant_id")\n                if variant_id:\n                    variant = next((v for v in product.get("variants", []) if v.get("id") == variant_id), None)\n                    if not variant:\n                        raise HTTPException(status_code=400, detail="Invalid product variant")\n                    expected_min += float(variant.get("price_delta", 0))\n                if price + 0.01 < expected_min:\n                    raise HTTPException(status_code=400, detail="Item price is below the catalog price")\n        computed_subtotal += price * qty'''
           new_legacy = '''        product_id = item.get("productId") or item.get("product_id")\n        if not product_id:\n            raise HTTPException(status_code=400, detail="Product reference is required for order")\n        product = await db.products.find_one({"id": product_id})\n        if not product:\n            raise HTTPException(status_code=400, detail="Product not found")\n        status = product.get("status") or {}\n        if status.get("active") is False or status.get("published") is False:\n            raise HTTPException(status_code=400, detail="Product is not available for purchase")\n        expected_price = float(product.get("base_price", 0))\n        variant_id = item.get("variantId") or item.get("variant_id")\n        variants = product.get("variants", []) or []\n        if variants:\n            if not variant_id:\n                raise HTTPException(status_code=400, detail="A product option must be selected")\n            variant = next((v for v in variants if v.get("id") == variant_id), None)\n            if not variant:\n                raise HTTPException(status_code=400, detail="Invalid product variant")\n            if variant.get("in_stock") is False:\n                raise HTTPException(status_code=400, detail="Selected product option is out of stock")\n            expected_price += float(variant.get("price_delta", 0))\n        elif variant_id:\n            raise HTTPException(status_code=400, detail="Invalid product variant")\n        expected_price = round(expected_price, 2)\n        if abs(price - expected_price) > 0.01:\n            raise HTTPException(status_code=400, detail="Item price does not match the catalog price")\n        item["productId"] = product_id\n        item["variantId"] = variant_id\n        item["price"] = expected_price\n        computed_subtotal += expected_price * qty'''
           count = text.count(old_legacy)
-          if count != 1:
+          if count == 1:
+              text = text.replace(old_legacy, new_legacy, 1)
+              changes.append("server-authoritative legacy order pricing")
+          elif 'Product reference is required for order' not in text:
               raise SystemExit(f"Expected exactly one legacy order pricing block, found {count}; refusing to patch")
-          text = text.replace(old_legacy, new_legacy, 1)
-          changes.append("server-authoritative legacy order pricing")
+
+          # Wallet payment is currently not wired into the checkout flow and does not atomically bind
+          # wallet debit, order ownership, and payment state. Disable it until the dedicated wallet
+          # checkout/payment transaction is implemented and tested.
+          start = text.find('@api_router.post("/users/{user_id}/wallet/pay")')
+          end = text.find('\n# ============================ Authentication endpoints ============================', start)
+          if start == -1 or end == -1:
+              raise SystemExit("Could not locate wallet payment endpoint; refusing to patch")
+          wallet_block = text[start:end]
+          if 'detail="Wallet payments are temporarily disabled until secure checkout integration is enabled."' not in wallet_block:
+              new_wallet = '''@api_router.post("/users/{user_id}/wallet/pay")\nasync def pay_with_wallet(user_id: str, amount: float, order_id: str, owner=Depends(verify_user_access)):\n    # SECURITY: this endpoint is intentionally disabled until wallet debit, order ownership,\n    # exact server-side order amount, and payment-state changes are committed atomically.\n    raise HTTPException(\n        status_code=403,\n        detail="Wallet payments are temporarily disabled until secure checkout integration is enabled.",\n    )\n'''
+              text = text[:start] + new_wallet + text[end:]
+              changes.append("disabled unintegrated wallet payment")
 
           path.write_text(text, encoding="utf-8")
           print("Applied: " + ", ".join(changes))
@@ -88,5 +102,5 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add backend/server.py
           git diff --cached --quiet && echo "No source change needed" && exit 0
-          git commit -m "security: enforce server catalog pricing for payments"
+          git commit -m "security: disable unintegrated wallet payment endpoint"
           git push origin main
