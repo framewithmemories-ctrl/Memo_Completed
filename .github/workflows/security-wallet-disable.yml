@@ -1,0 +1,54 @@
+name: Security wallet payment safety
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/security-wallet-disable.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  disable-unintegrated-wallet-pay:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 1
+
+      - name: Disable unsafe wallet payment endpoint
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path("backend/server.py")
+          text = path.read_text(encoding="utf-8")
+          start = text.find('@api_router.post("/users/{user_id}/wallet/pay")')
+          end = text.find('\n# ============================ Authentication endpoints ============================', start)
+          if start == -1 or end == -1:
+              raise SystemExit("Could not locate wallet payment endpoint; refusing to patch")
+
+          block = text[start:end]
+          if 'Wallet payments are temporarily disabled until secure checkout integration is enabled.' in block:
+              print("Wallet payment endpoint is already disabled")
+          else:
+              replacement = '''@api_router.post("/users/{user_id}/wallet/pay")\nasync def pay_with_wallet(user_id: str, amount: float, order_id: str, owner=Depends(verify_user_access)):\n    # SECURITY: this endpoint is intentionally disabled until wallet debit, order ownership,\n    # exact server-side order amount, and payment-state changes are committed atomically.\n    raise HTTPException(\n        status_code=403,\n        detail="Wallet payments are temporarily disabled until secure checkout integration is enabled.",\n    )\n'''
+              path.write_text(text[:start] + replacement + text[end:], encoding="utf-8")
+              print("Disabled unintegrated wallet payment endpoint")
+          PY
+
+      - name: Validate Python syntax
+        run: python -m py_compile backend/server.py
+
+      - name: Commit change
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add backend/server.py
+          git diff --cached --quiet && echo "No source change needed" && exit 0
+          git commit -m "security: disable unintegrated wallet payment endpoint"
+          git push origin main
