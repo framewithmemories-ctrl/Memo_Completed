@@ -1012,7 +1012,9 @@ async def get_chat_history(session_id: str):
 
 
 @api_router.post("/orders", response_model=Order)
-async def create_order(order: OrderCreate):
+async def create_order(order: OrderCreate, current=Depends(get_current_user)):
+    if order.user_id != current["id"]:
+        raise HTTPException(status_code=403, detail="Not authorized to create an order for another account")
     # --- Financial integrity: never blindly trust client totals ---
     if not order.items:
         raise HTTPException(status_code=400, detail="Order must contain at least one item")
@@ -1177,7 +1179,9 @@ async def get_payment_config():
 
 
 @api_router.post("/payments/create-order")
-async def create_payment_order(payload: PaymentCreateRequest):
+async def create_payment_order(payload: PaymentCreateRequest, current=Depends(get_current_user)):
+    if payload.user_id != current["id"]:
+        raise HTTPException(status_code=403, detail="Not authorized to create a payment order for another account")
     """Validate cart, compute the server-authoritative amount, create a pending Memories order
     and a matching Razorpay order, then return payment info for the frontend checkout."""
     user = await db.users.find_one({"id": payload.user_id}) if payload.user_id else None
@@ -1212,12 +1216,14 @@ async def create_payment_order(payload: PaymentCreateRequest):
 
 
 @api_router.post("/payments/verify")
-async def verify_payment(payload: PaymentVerifyRequest):
+async def verify_payment(payload: PaymentVerifyRequest, current=Depends(get_current_user)):
     """Verify a Razorpay payment using the SERVER-STORED razorpay_order_id, then mark paid.
     mock mode bypasses signature; production verifies HMAC-SHA256(stored_order|payment_id)."""
     order = await db.orders.find_one({"id": payload.order_id})
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
+    if order.get("user_id") != current["id"]:
+        raise HTTPException(status_code=403, detail="Not authorized to verify payment for this order")
 
     # Idempotency: already paid -> safe success, but reject a DIFFERENT payment_id
     if order.get("payment_status") == "paid":
