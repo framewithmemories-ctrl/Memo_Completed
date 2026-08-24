@@ -1,0 +1,78 @@
+name: Security payment authorization hardening
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  harden-payment-auth:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 1
+
+      - name: Harden order and payment ownership
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path("backend/server.py")
+          text = path.read_text(encoding="utf-8")
+
+          changes = []
+
+          # Legacy/general order creation must be authenticated and scoped to the caller.
+          old = '''@api_router.post("/orders", response_model=Order)\nasync def create_order(order: OrderCreate):'''
+          new = '''@api_router.post("/orders", response_model=Order)\nasync def create_order(order: OrderCreate, current=Depends(get_current_user)):\n    if order.user_id != current["id"]:\n        raise HTTPException(status_code=403, detail="Not authorized to create an order for another account")'''
+          if old in text:
+              text = text.replace(old, new, 1)
+              changes.append("authenticated /orders creation")
+          elif 'async def create_order(order: OrderCreate, current=Depends(get_current_user))' not in text:
+              raise SystemExit("Could not locate /orders endpoint; refusing to patch")
+
+          # Razorpay order creation must be tied to the authenticated account.
+          old = '''@api_router.post("/payments/create-order")\nasync def create_payment_order(payload: PaymentCreateRequest):'''
+          new = '''@api_router.post("/payments/create-order")\nasync def create_payment_order(payload: PaymentCreateRequest, current=Depends(get_current_user)):\n    if payload.user_id != current["id"]:\n        raise HTTPException(status_code=403, detail="Not authorized to create a payment order for another account")'''
+          if old in text:
+              text = text.replace(old, new, 1)
+              changes.append("authenticated payment-order creation")
+          elif 'async def create_payment_order(payload: PaymentCreateRequest, current=Depends(get_current_user))' not in text:
+              raise SystemExit("Could not locate /payments/create-order endpoint; refusing to patch")
+
+          # Payment verification must only be callable by the owner of the order.
+          old = '''@api_router.post("/payments/verify")\nasync def verify_payment(payload: PaymentVerifyRequest):'''
+          new = '''@api_router.post("/payments/verify")\nasync def verify_payment(payload: PaymentVerifyRequest, current=Depends(get_current_user)):\n    '''
+          if old in text:
+              text = text.replace(old, new, 1)
+              marker = '''    order = await db.orders.find_one({"id": payload.order_id})\n    if not order:\n        raise HTTPException(status_code=404, detail="Order not found")'''
+              replacement = '''    order = await db.orders.find_one({"id": payload.order_id})\n    if not order:\n        raise HTTPException(status_code=404, detail="Order not found")\n    if order.get("user_id") != current["id"]:\n        raise HTTPException(status_code=403, detail="Not authorized to verify payment for this order")'''
+              if marker not in text:
+                  raise SystemExit("Could not locate payment verification ownership check point; refusing to patch")
+              text = text.replace(marker, replacement, 1)
+              changes.append("payment verification ownership")
+          elif 'async def verify_payment(payload: PaymentVerifyRequest, current=Depends(get_current_user))' not in text:
+              raise SystemExit("Could not locate /payments/verify endpoint; refusing to patch")
+
+          if not changes:
+              print("All payment authorization hardening is already present; no source change needed.")
+          else:
+              path.write_text(text, encoding="utf-8")
+              print("Applied: " + ", ".join(changes))
+          PY
+
+      - name: Validate Python syntax
+        run: python -m py_compile backend/server.py
+
+      - name: Commit change
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add backend/server.py
+          git diff --cached --quiet && echo "No source change needed" && exit 0
+          git commit -m "security: require authenticated order ownership for payments"
+          git push origin main
