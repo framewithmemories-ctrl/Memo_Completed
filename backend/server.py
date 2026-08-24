@@ -1771,8 +1771,8 @@ class LoginRequest(BaseModel):
 
 @api_router.post("/auth/register")
 async def register(req: RegisterRequest):
-    if len(req.password) < 6:
-        raise HTTPException(status_code=400, detail="Password must be at least 6 characters")
+    if len(req.password) < 8:
+        raise HTTPException(status_code=400, detail="Password must be at least 8 characters")
     email = req.email.strip().lower()
     existing = await db.users.find_one({"email": email})
     if existing:
@@ -1802,8 +1802,7 @@ class ForgotPasswordRequest(BaseModel):
 class ResetPasswordRequest(BaseModel):
     email: str
     new_password: str
-    token: Optional[str] = None   # from forgot-password (logged to server)
-    phone: Optional[str] = None   # OR registered-phone verification (no SMTP path)
+    token: str
 
 
 def _hash_token(raw: str) -> str:
@@ -1812,13 +1811,14 @@ def _hash_token(raw: str) -> str:
 
 @api_router.post("/auth/forgot-password")
 async def forgot_password(req: ForgotPasswordRequest):
-    """Unauthenticated. Generates a short-lived reset token, stores it hashed with a TTL
-    expiry, and logs it to the server (no SMTP configured). Always returns a generic
-    response so it never reveals whether an email is registered."""
+    """Create a short-lived hashed reset token without revealing account existence.
+    The raw token is never logged or returned; a verified email/SMS delivery channel
+    must deliver it before production self-service recovery is enabled."""
     email = (req.email or "").strip().lower()
-    generic = {"success": True,
-               "message": "If an account exists for that email, a reset option is available. "
-                          "You can reset using your registered phone number."}
+    generic = {
+        "success": True,
+        "message": "If an account exists for that email, a password reset option will be available.",
+    }
     user = await db.users.find_one({"email": email})
     if user:
         raw_token = secrets.token_urlsafe(32)
@@ -1831,57 +1831,56 @@ async def forgot_password(req: ForgotPasswordRequest):
             "created_at": datetime.now(timezone.utc).isoformat(),
             "expires_at": expires_at,
         })
-        # No SMTP: log the token so it can be retrieved from server logs during debugging.
-        logger.warning(f"[PASSWORD RESET] token for {email} (valid 1h): {raw_token}")
     return generic
 
 
 @api_router.post("/auth/reset-password")
 async def reset_password(req: ResetPasswordRequest):
-    """Unauthenticated self-service reset. Accepts EITHER a valid reset token (from
-    forgot-password) OR the user's registered phone number as lightweight verification."""
+    """Reset password using a one-time reset token only.
+    Phone-number knowledge is deliberately not accepted as proof of identity."""
     email = (req.email or "").strip().lower()
-    if len(req.new_password) < 6:
-        raise HTTPException(status_code=400, detail="Password must be at least 6 characters")
+    if len(req.new_password) < 8:
+        raise HTTPException(status_code=400, detail="Password must be at least 8 characters")
     if len(req.new_password.encode("utf-8")) > 72:
         raise HTTPException(status_code=400, detail="Password must be 72 bytes or fewer")
+    if not req.token or len(req.token) > 512:
+        raise HTTPException(status_code=400, detail="Invalid or expired reset token")
 
     user = await db.users.find_one({"email": email})
-    invalid = HTTPException(status_code=400, detail="Verification failed. Check your email and phone/token and try again.")
     if not user:
-        raise invalid
+        raise HTTPException(status_code=400, detail="Invalid or expired reset token")
 
-    verified = False
-    token_doc = None
-    if req.token:
-        token_doc = await db.password_reset_tokens.find_one({
-            "email": email, "token_hash": _hash_token(req.token), "used": False,
-        })
-        if token_doc:
-            exp_dt = token_doc.get("expires_at")
-            if isinstance(exp_dt, datetime):
-                if exp_dt.tzinfo is None:
-                    exp_dt = exp_dt.replace(tzinfo=timezone.utc)
-                if exp_dt >= datetime.now(timezone.utc):
-                    verified = True
-    if not verified and req.phone:
-        registered = (user.get("phone") or "").strip()
-        supplied = req.phone.strip()
-        # compare last 10 digits to tolerate country-code/formatting differences
-        norm = lambda s: "".join(ch for ch in s if ch.isdigit())[-10:]
-        if registered and norm(registered) and norm(registered) == norm(supplied):
-            verified = True
+    token_doc = await db.password_reset_tokens.find_one({
+        "email": email,
+        "token_hash": _hash_token(req.token),
+        "used": False,
+    })
+    if not token_doc:
+        raise HTTPException(status_code=400, detail="Invalid or expired reset token")
 
-    if not verified:
-        raise invalid
+    exp_dt = token_doc.get("expires_at")
+    if not isinstance(exp_dt, datetime):
+        raise HTTPException(status_code=400, detail="Invalid or expired reset token")
+    if exp_dt.tzinfo is None:
+        exp_dt = exp_dt.replace(tzinfo=timezone.utc)
+    if exp_dt < datetime.now(timezone.utc):
+        raise HTTPException(status_code=400, detail="Invalid or expired reset token")
+
+    consumed = await db.password_reset_tokens.update_one(
+        {"_id": token_doc["_id"], "used": False},
+        {"$set": {"used": True, "used_at": datetime.now(timezone.utc)}},
+    )
+    if consumed.modified_count != 1:
+        raise HTTPException(status_code=400, detail="Invalid or expired reset token")
 
     await db.users.update_one(
         {"id": user["id"]},
         {"$set": {"password_hash": hash_password(req.new_password), "must_change_password": False}},
     )
-    if token_doc:
-        await db.password_reset_tokens.update_one({"_id": token_doc["_id"]}, {"$set": {"used": True}})
-    await db.password_reset_tokens.update_many({"email": email, "used": False}, {"$set": {"used": True}})
+    await db.password_reset_tokens.update_many(
+        {"email": email, "used": False},
+        {"$set": {"used": True, "used_at": datetime.now(timezone.utc)}},
+    )
     return {"success": True, "message": "Password updated. You can now log in with your new password."}
 
 
