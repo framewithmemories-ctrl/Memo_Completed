@@ -1895,8 +1895,8 @@ async def change_password(req: ChangePasswordRequest, current=Depends(get_curren
     must_change_password flag on success."""
     if not verify_password(req.current_password, current.get("password_hash", "")):
         raise HTTPException(status_code=401, detail="Current password is incorrect")
-    if len(req.new_password) < 6:
-        raise HTTPException(status_code=400, detail="Password must be at least 6 characters")
+    if len(req.new_password) < 8:
+        raise HTTPException(status_code=400, detail="Password must be at least 8 characters")
     if len(req.new_password.encode("utf-8")) > 72:
         raise HTTPException(status_code=400, detail="Password must be 72 bytes or fewer")
     if verify_password(req.new_password, current.get("password_hash", "")):
