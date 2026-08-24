@@ -1698,17 +1698,20 @@ async def convert_points_to_credits(user_id: str, points: int, owner=Depends(ver
     new_points = current_points - points
     new_store_credits = user.get("store_credits", 0.0) + credit_value
     
-    # Update user
-    await db.users.update_one(
-        {"id": user_id},
+    # Atomically spend the points so two concurrent requests cannot convert the same points twice.
+    result = await db.users.update_one(
+        {"id": user_id, "points": {"$gte": points}},
         {
-            "$set": {
-                "points": new_points,
-                "store_credits": new_store_credits
-            }
+            "$inc": {"points": -points, "store_credits": credit_value}
         }
     )
-    
+    if result.matched_count != 1:
+        raise HTTPException(status_code=409, detail="Reward points changed. Please refresh and try again.")
+
+    updated_user = await db.users.find_one({"id": user_id})
+    new_points = int(updated_user.get("points", 0) or 0)
+    new_store_credits = float(updated_user.get("store_credits", 0.0) or 0.0)
+
     # Record transaction
     transaction = WalletTransaction(
         user_id=user_id,
