@@ -1,0 +1,158 @@
+name: Security atomic money state
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/security-atomic-money-state.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  harden-atomic-money-state:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 1
+
+      - name: Harden atomic wallet conversion and payment finalization
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path("backend/server.py")
+          text = path.read_text(encoding="utf-8")
+          changes = []
+
+          old_conversion = '''    # 100 points = ₹10 store credit
+    credit_value = (points / 100) * 10
+    new_points = current_points - points
+    new_store_credits = user.get("store_credits", 0.0) + credit_value
+    
+    # Update user
+    await db.users.update_one(
+        {"id": user_id},
+        {
+            "$set": {
+                "points": new_points,
+                "store_credits": new_store_credits
+            }
+        }
+    )
+    
+    # Record transaction
+    transaction = WalletTransaction(
+        user_id=user_id,
+        type="conversion",
+        amount=points,
+        description=f"Converted {points} points to ₹{credit_value} store credit",
+        category="conversion",
+        balance_after=user.get("wallet_balance", 0.0),
+        is_points=True,
+        credit_earned=credit_value
+    )
+    await db.wallet_transactions.insert_one(transaction.dict())
+    
+    return {
+        "points_remaining": new_points,
+        "store_credits": new_store_credits,
+        "credit_earned": credit_value
+    }'''
+          new_conversion = '''    # 100 points = ₹10 store credit. Consume points atomically so concurrent
+    # requests cannot spend the same points twice.
+    credit_value = (points / 100) * 10
+    result = await db.users.update_one(
+        {"id": user_id, "points": {"$gte": points}},
+        {"$inc": {"points": -points, "store_credits": credit_value}}
+    )
+    if result.modified_count != 1:
+        raise HTTPException(status_code=400, detail="Insufficient points")
+
+    updated_user = await db.users.find_one({"id": user_id})
+    new_points = int(updated_user.get("points", 0))
+    new_store_credits = float(updated_user.get("store_credits", 0.0))
+
+    # Record transaction only after the atomic points deduction succeeds.
+    transaction = WalletTransaction(
+        user_id=user_id,
+        type="conversion",
+        amount=points,
+        description=f"Converted {points} points to ₹{credit_value} store credit",
+        category="conversion",
+        balance_after=float(updated_user.get("wallet_balance", 0.0)),
+        is_points=True,
+        credit_earned=credit_value
+    )
+    await db.wallet_transactions.insert_one(transaction.dict())
+
+    return {
+        "points_remaining": new_points,
+        "store_credits": new_store_credits,
+        "credit_earned": credit_value
+    }'''
+          if old_conversion in text:
+              text = text.replace(old_conversion, new_conversion, 1)
+              changes.append("atomic reward-point conversion")
+          elif 'Consume points atomically so concurrent' not in text:
+              raise SystemExit("Could not locate reward conversion block; refusing to patch")
+
+          old_payment = '''    # --- Payment verified: commit state exactly once ---
+    await db.orders.update_one(
+        {"id": payload.order_id},
+        {"$set": {
+            "status": "processing",
+            "payment_status": "paid",
+            "order_status": "confirmed",
+            "razorpay_payment_id": payload.razorpay_payment_id,
+            "razorpay_signature": payload.razorpay_signature,
+            "payment_updated_at": datetime.now(timezone.utc),
+        }},
+    )'''
+          new_payment = '''    # --- Payment verified: atomically transition pending -> paid exactly once ---
+    # This prevents two concurrent verification requests from both awarding points
+    # or consuming store credit for the same order.
+    transition = await db.orders.update_one(
+        {"id": payload.order_id, "payment_status": {"$ne": "paid"}},
+        {"$set": {
+            "status": "processing",
+            "payment_status": "paid",
+            "order_status": "confirmed",
+            "razorpay_payment_id": payload.razorpay_payment_id,
+            "razorpay_signature": payload.razorpay_signature,
+            "payment_updated_at": datetime.now(timezone.utc),
+        }},
+    )
+    if transition.modified_count != 1:
+        latest = await db.orders.find_one({"id": payload.order_id})
+        if latest and latest.get("payment_status") == "paid":
+            if payload.razorpay_payment_id and latest.get("razorpay_payment_id") and payload.razorpay_payment_id != latest.get("razorpay_payment_id"):
+                raise HTTPException(status_code=409, detail="Order already paid with a different payment")
+            return {"success": True, "order_id": payload.order_id,
+                    "status": latest.get("status", "processing"), "mode": PAYMENT_MODE, "already_paid": True}
+        raise HTTPException(status_code=409, detail="Payment state changed; please retry")'''
+          if old_payment in text:
+              text = text.replace(old_payment, new_payment, 1)
+              changes.append("atomic payment finalization")
+          elif 'atomically transition pending -> paid exactly once' not in text:
+              raise SystemExit("Could not locate payment finalization block; refusing to patch")
+
+          path.write_text(text, encoding="utf-8")
+          print("Applied: " + ", ".join(changes))
+          PY
+
+      - name: Validate Python syntax
+        run: python -m py_compile backend/server.py
+
+      - name: Commit change
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add backend/server.py
+          git diff --cached --quiet && echo "No source change needed" && exit 0
+          git commit -m "security: make wallet conversion and payment finalization atomic"
+          git push origin main
