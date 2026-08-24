@@ -1,5 +1,8 @@
 name: Security lockdown (one-time)
 
+# One-time remediation: applies the P0 password-reset security changes to main,
+# validates Python syntax, commits the result, and removes this temporary workflow.
+
 on:
   push:
     branches:
