@@ -1030,21 +1030,36 @@ async def create_order(order: OrderCreate, current=Depends(get_current_user)):
             raise HTTPException(status_code=400, detail="Invalid item quantity")
         if not math.isfinite(price) or price < 0 or price > 1_000_000:
             raise HTTPException(status_code=400, detail="Invalid item price")
-        # Source-of-truth: submitted price cannot be below the catalog base price (+ variant)
-        product_id = item.get("product_id") or item.get("id")
-        if product_id:
-            product = await db.products.find_one({"id": product_id})
-            if product:
-                expected_min = float(product.get("base_price", 0))
-                variant_id = item.get("variant_id")
-                if variant_id:
-                    variant = next((v for v in product.get("variants", []) if v.get("id") == variant_id), None)
-                    if not variant:
-                        raise HTTPException(status_code=400, detail="Invalid product variant")
-                    expected_min += float(variant.get("price_delta", 0))
-                if price + 0.01 < expected_min:
-                    raise HTTPException(status_code=400, detail="Item price is below the catalog price")
-        computed_subtotal += price * qty
+        product_id = item.get("productId") or item.get("product_id")
+        if not product_id:
+            raise HTTPException(status_code=400, detail="Product reference is required for order")
+        product = await db.products.find_one({"id": product_id})
+        if not product:
+            raise HTTPException(status_code=400, detail="Product not found")
+        status = product.get("status") or {}
+        if status.get("active") is False or status.get("published") is False:
+            raise HTTPException(status_code=400, detail="Product is not available for purchase")
+        expected_price = float(product.get("base_price", 0))
+        variant_id = item.get("variantId") or item.get("variant_id")
+        variants = product.get("variants", []) or []
+        if variants:
+            if not variant_id:
+                raise HTTPException(status_code=400, detail="A product option must be selected")
+            variant = next((v for v in variants if v.get("id") == variant_id), None)
+            if not variant:
+                raise HTTPException(status_code=400, detail="Invalid product variant")
+            if variant.get("in_stock") is False:
+                raise HTTPException(status_code=400, detail="Selected product option is out of stock")
+            expected_price += float(variant.get("price_delta", 0))
+        elif variant_id:
+            raise HTTPException(status_code=400, detail="Invalid product variant")
+        expected_price = round(expected_price, 2)
+        if abs(price - expected_price) > 0.01:
+            raise HTTPException(status_code=400, detail="Item price does not match the catalog price")
+        item["productId"] = product_id
+        item["variantId"] = variant_id
+        item["price"] = expected_price
+        computed_subtotal += expected_price * qty
 
     total = order.total_amount
     if total is None or not math.isfinite(total) or total <= 0 or total > 5_000_000:
@@ -1113,20 +1128,40 @@ async def _compute_order_pricing(items: list, delivery_type: str, use_store_cred
             raise HTTPException(status_code=400, detail="Invalid item quantity")
         if not math.isfinite(price) or price < 0 or price > 1_000_000:
             raise HTTPException(status_code=400, detail="Invalid item price")
-        product_id = item.get("product_id") or item.get("id")
-        if product_id:
-            product = await db.products.find_one({"id": product_id})
-            if product:
-                expected_min = float(product.get("base_price", 0))
-                variant_id = item.get("variant_id")
-                if variant_id:
-                    variant = next((v for v in product.get("variants", []) if v.get("id") == variant_id), None)
-                    if not variant:
-                        raise HTTPException(status_code=400, detail="Invalid product variant")
-                    expected_min += float(variant.get("price_delta", 0))
-                if price + 0.01 < expected_min:
-                    raise HTTPException(status_code=400, detail="Item price is below the catalog price")
-        subtotal += price * qty
+        product_id = item.get("productId") or item.get("product_id")
+        if not product_id:
+            raise HTTPException(status_code=400, detail="Product reference is required for payment")
+        product = await db.products.find_one({"id": product_id})
+        if not product:
+            raise HTTPException(status_code=400, detail="Product not found")
+        status = product.get("status") or {}
+        if status.get("active") is False or status.get("published") is False:
+            raise HTTPException(status_code=400, detail="Product is not available for purchase")
+
+        expected_price = float(product.get("base_price", 0))
+        variant_id = item.get("variantId") or item.get("variant_id")
+        variants = product.get("variants", []) or []
+        if variants:
+            if not variant_id:
+                raise HTTPException(status_code=400, detail="A product option must be selected")
+            variant = next((v for v in variants if v.get("id") == variant_id), None)
+            if not variant:
+                raise HTTPException(status_code=400, detail="Invalid product variant")
+            if variant.get("in_stock") is False:
+                raise HTTPException(status_code=400, detail="Selected product option is out of stock")
+            expected_price += float(variant.get("price_delta", 0))
+        elif variant_id:
+            raise HTTPException(status_code=400, detail="Invalid product variant")
+
+        expected_price = round(expected_price, 2)
+        if abs(price - expected_price) > 0.01:
+            raise HTTPException(status_code=400, detail="Item price does not match the catalog price")
+
+        # Normalize the stored order line to the server price so admin/order history cannot contain a forged price.
+        item["productId"] = product_id
+        item["variantId"] = variant_id
+        item["price"] = expected_price
+        subtotal += expected_price * qty
 
     delivery = 0.0 if (delivery_type == "pickup" or subtotal >= 1000) else 50.0
     tax = round(subtotal * 0.18)
