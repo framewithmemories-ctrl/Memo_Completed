@@ -1,0 +1,92 @@
+name: Security - atomic payment finalization
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/security-atomic-payment-finalization.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  harden-payment-finalization:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Apply atomic payment finalization
+        shell: python
+        run: |
+          from pathlib import Path
+          import re
+
+          path = Path("backend/server.py")
+          text = path.read_text(encoding="utf-8")
+
+          old = '''    # --- Payment verified: commit state exactly once ---
+    await db.orders.update_one(
+        {"id": payload.order_id},
+        {"$set": {
+            "status": "processing",
+            "payment_status": "paid",
+            "order_status": "confirmed",
+            "razorpay_payment_id": payload.razorpay_payment_id,
+            "razorpay_signature": payload.razorpay_signature,
+            "payment_updated_at": datetime.now(timezone.utc),
+        }},
+    )
+'''
+
+          new = '''    # --- Payment verified: atomically transition the order to paid ---
+    # Only the request that changes pending/failed -> paid is allowed to perform
+    # the downstream financial side effects. Concurrent verification requests lose
+    # this compare-and-set and therefore cannot award points or spend credit twice.
+    finalize_result = await db.orders.update_one(
+        {
+            "id": payload.order_id,
+            "payment_status": {"$in": ["pending", "failed"]},
+        },
+        {"$set": {
+            "status": "processing",
+            "payment_status": "paid",
+            "order_status": "confirmed",
+            "razorpay_payment_id": payload.razorpay_payment_id,
+            "razorpay_signature": payload.razorpay_signature,
+            "payment_updated_at": datetime.now(timezone.utc),
+        }},
+    )
+
+    if finalize_result.modified_count != 1:
+        latest = await db.orders.find_one({"id": payload.order_id})
+        if latest and latest.get("payment_status") == "paid":
+            if payload.razorpay_payment_id and latest.get("razorpay_payment_id") and payload.razorpay_payment_id != latest.get("razorpay_payment_id"):
+                raise HTTPException(status_code=409, detail="Order already paid with a different payment")
+            return {"success": True, "order_id": payload.order_id,
+                    "status": latest.get("status", "processing"), "mode": PAYMENT_MODE, "already_paid": True}
+        raise HTTPException(status_code=409, detail="Payment state changed. Please retry.")
+'''
+
+          if old not in text:
+              raise SystemExit("Expected payment finalization block not found; refusing to patch")
+
+          text = text.replace(old, new, 1)
+          path.write_text(text, encoding="utf-8")
+
+      - name: Syntax check
+        run: python -m py_compile backend/server.py
+
+      - name: Commit and push
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add backend/server.py
+          if git diff --cached --quiet; then
+            echo "No changes to commit"
+            exit 0
+          fi
+          git commit -m "security: make payment finalization atomic"
+          git push
