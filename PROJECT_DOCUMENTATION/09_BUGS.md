@@ -50,7 +50,7 @@ Status reflects the audit snapshot (June 2026). No code was changed during this 
 
 12. **No pagination** on admin lists (fixed `limit` only) — large datasets will be truncated silently.
 
-13. **AI free‑tier fragility.** During testing, `gemini-2.5-flash` returned transient `503`; the fallback model handles most cases but sustained launch traffic on a free tier may raise error rates. Monitor via AI Usage card; consider billing/paid tier before scaling. (Truncation bug and dead `2.0-flash` fallback were already fixed.)
+13. **AI free‑tier fragility.** During testing, `gemini-2.5-flash` returned transient `503`; the fallback model handles most cases but sustained launch traffic on a free tier may raise error rates. Monitor via AI Usage card; consider billing/paid tier before scaling.
 
 14. **Guest orders** use `user_id:"guest"` with no linkage to a later account.
 
@@ -58,3 +58,8 @@ Status reflects the audit snapshot (June 2026). No code was changed during this 
 
 ## Not reproduced / clarified
 - **"Menu flickers on hover until I click"** — no hover dropdown exists in the current preview code, so this cannot originate from shipped code; likely an older/separately deployed build. Building the hover‑stable `ShopMegaMenu` (with close‑delay) is the intended resolution.
+
+---
+
+## Audit update — 24 Aug 2026
+The current `main` branch has already fixed several items listed above, including protected product/user writes and database indexes. This document is being refreshed as part of the production security lockdown; it should not be treated as the authoritative current status until the new `PROJECT_STATUS.md` is published.
