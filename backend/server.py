@@ -1292,84 +1292,110 @@ async def verify_payment(payload: PaymentVerifyRequest, current=Depends(get_curr
                                        {"$set": {"payment_status": "failed", "payment_updated_at": datetime.now(timezone.utc)}})
             raise HTTPException(status_code=400, detail="Payment signature verification failed")
 
-        # --- Payment verified: atomically transition pending -> paid exactly once ---
-    # Only the request that wins this conditional update may continue to deduct
-    # store credit and award purchase points. Concurrent verification requests
-    # become idempotent responses instead of double-processing the order.
-    transition = await db.orders.update_one(
-        {
-            "id": payload.order_id,
-            "payment_status": {"$ne": "paid"},
-        },
-        {
-            "$set": {
-                "status": "processing",
-                "payment_status": "paid",
-                "order_status": "confirmed",
-                "razorpay_payment_id": payload.razorpay_payment_id,
-                "razorpay_signature": payload.razorpay_signature,
-                "payment_updated_at": datetime.now(timezone.utc),
-            }
-        },
+       # --- Payment verified: atomically transition pending -> paid exactly once ---
+# Only the request that wins this conditional update may continue to deduct
+# store credit and award purchase points. Concurrent verification requests
+# become idempotent responses instead of double-processing the order.
+transition = await db.orders.update_one(
+    {
+        "id": payload.order_id,
+        "payment_status": {"$ne": "paid"},
+    },
+    {
+        "$set": {
+            "status": "processing",
+            "payment_status": "paid",
+            "order_status": "confirmed",
+            "razorpay_payment_id": payload.razorpay_payment_id,
+            "razorpay_signature": payload.razorpay_signature,
+            "payment_updated_at": datetime.now(timezone.utc),
+        }
+    },
+)
+
+if transition.modified_count != 1:
+    latest = await db.orders.find_one({"id": payload.order_id})
+
+    if latest and latest.get("payment_status") == "paid":
+        if (
+            payload.razorpay_payment_id
+            and latest.get("razorpay_payment_id")
+            and payload.razorpay_payment_id
+            != latest.get("razorpay_payment_id")
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail="Order already paid with a different payment",
+            )
+
+        return {
+            "success": True,
+            "order_id": payload.order_id,
+            "status": latest.get("status", "processing"),
+            "mode": PAYMENT_MODE,
+            "already_paid": True,
+        }
+
+    raise HTTPException(
+        status_code=409,
+        detail="Payment state changed; please retry",
     )
 
-    if transition.modified_count != 1:
-        latest = await db.orders.find_one({"id": payload.order_id})
-
-        if latest and latest.get("payment_status") == "paid":
-            if (
-                payload.razorpay_payment_id
-                and latest.get("razorpay_payment_id")
-                and payload.razorpay_payment_id
-                != latest.get("razorpay_payment_id")
-            ):
-                raise HTTPException(
-                    status_code=409,
-                    detail="Order already paid with a different payment",
-                )
-
-            return {
-                "success": True,
-                "order_id": payload.order_id,
-                "status": latest.get("status", "processing"),
-                "mode": PAYMENT_MODE,
-                "already_paid": True,
-            }
-
-        raise HTTPException(
-            status_code=409,
-            detail="Payment state changed; please retry",
-        )
-
-    # Commit store-credit deduction now (only after successful payment); guard double-commit
-    sc = float(order.get("store_credit_applied", 0.0) or 0.0)
-    if sc > 0 and order.get("user_id"):
-        existing_txn = await db.wallet_transactions.find_one(
-            {"order_id": payload.order_id, "type": "debit"})
-        if not existing_txn:
-            u = await db.users.find_one({"id": order["user_id"]})
-            if u:
-                new_credit = max(0.0, float(u.get("store_credits", 0.0) or 0.0) - sc)
-                await db.users.update_one({"id": order["user_id"]}, {"$set": {"store_credits": new_credit}})
-                await db.wallet_transactions.insert_one(WalletTransaction(
-                    user_id=order["user_id"], type="debit", amount=sc,
-                    description=f"Store credit for order #{payload.order_id[:8]}",
-                    category="purchase", order_id=payload.order_id, balance_after=new_credit,
-                ).dict())
-
-    # Award purchase points once (idempotent via payment_status transition above)
-    pts = int(order.get("points_earned", 0) or 0)
-    if pts > 0 and order.get("user_id"):
+# Commit store-credit deduction now (only after successful payment); guard double-commit
+sc = float(order.get("store_credit_applied", 0.0) or 0.0)
+if sc > 0 and order.get("user_id"):
+    existing_txn = await db.wallet_transactions.find_one(
+        {"order_id": payload.order_id, "type": "debit"}
+    )
+    if not existing_txn:
         u = await db.users.find_one({"id": order["user_id"]})
         if u:
-            new_points = int(u.get("points", 0) or 0) + pts
-            new_tier = "Platinum" if new_points >= 5000 else "Gold" if new_points >= 2000 else "Silver"
-            await db.users.update_one({"id": order["user_id"]}, {"$set": {"points": new_points, "tier": new_tier}})
+            new_credit = max(
+                0.0,
+                float(u.get("store_credits", 0.0) or 0.0) - sc,
+            )
+            await db.users.update_one(
+                {"id": order["user_id"]},
+                {"$set": {"store_credits": new_credit}},
+            )
+            await db.wallet_transactions.insert_one(
+                WalletTransaction(
+                    user_id=order["user_id"],
+                    type="debit",
+                    amount=sc,
+                    description=f"Store credit for order #{payload.order_id[:8]}",
+                    category="purchase",
+                    order_id=payload.order_id,
+                    balance_after=new_credit,
+                ).dict()
+            )
 
-    # TODO(webhook-sprint): a future Razorpay webhook should reconcile captured/failed/refund
-    # events against these fields (payment_status, razorpay_payment_id) for out-of-band updates.
-    return {"success": True, "order_id": payload.order_id, "status": "processing", "mode": PAYMENT_MODE}
+# Award purchase points once (idempotent via payment_status transition above)
+pts = int(order.get("points_earned", 0) or 0)
+if pts > 0 and order.get("user_id"):
+    u = await db.users.find_one({"id": order["user_id"]})
+    if u:
+        new_points = int(u.get("points", 0) or 0) + pts
+        new_tier = (
+            "Platinum"
+            if new_points >= 5000
+            else "Gold"
+            if new_points >= 2000
+            else "Silver"
+        )
+        await db.users.update_one(
+            {"id": order["user_id"]},
+            {"$set": {"points": new_points, "tier": new_tier}},
+        )
 
+# TODO(webhook-sprint): a future Razorpay webhook should reconcile captured/failed/refund
+# events against these fields (payment_status, razorpay_payment_id) for out-of-band updates.
+return {
+    "success": True,
+    "order_id": payload.order_id,
+    "status": "processing",
+    "mode": PAYMENT_MODE,
+} :contentReference[oaicite:0]{index=0}
 
 @api_router.get("/orders/{user_id}")
 async def get_user_orders(user_id: str, owner=Depends(verify_user_access)):
