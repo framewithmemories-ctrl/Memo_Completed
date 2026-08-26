@@ -1292,17 +1292,54 @@ async def verify_payment(payload: PaymentVerifyRequest, current=Depends(get_curr
                                        {"$set": {"payment_status": "failed", "payment_updated_at": datetime.now(timezone.utc)}})
             raise HTTPException(status_code=400, detail="Payment signature verification failed")
 
-    # --- Payment verified: commit state exactly once ---
-    await db.orders.update_one(
-        {"id": payload.order_id},
-        {"$set": {
+    # --- Payment verified: atomically transition the order to paid ---
+# Only the request that changes pending/failed -> paid is allowed to perform
+# downstream financial side effects. Concurrent verification requests lose
+# this compare-and-set and therefore cannot award points or spend credit twice.
+finalize_result = await db.orders.update_one(
+    {
+        "id": payload.order_id,
+        "payment_status": {"$in": ["pending", "failed"]},
+    },
+    {
+        "$set": {
             "status": "processing",
             "payment_status": "paid",
             "order_status": "confirmed",
             "razorpay_payment_id": payload.razorpay_payment_id,
             "razorpay_signature": payload.razorpay_signature,
             "payment_updated_at": datetime.now(timezone.utc),
-        }},
+        }
+    },
+)
+
+if finalize_result.modified_count != 1:
+    latest = await db.orders.find_one({"id": payload.order_id})
+
+    if latest and latest.get("payment_status") == "paid":
+        # Idempotent retry: same payment can safely return success.
+        if (
+            payload.razorpay_payment_id
+            and latest.get("razorpay_payment_id")
+            and payload.razorpay_payment_id
+            != latest.get("razorpay_payment_id")
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail="Order already paid with a different payment",
+            )
+
+        return {
+            "success": True,
+            "order_id": payload.order_id,
+            "status": latest.get("status", "processing"),
+            "mode": PAYMENT_MODE,
+            "already_paid": True,
+        }
+
+    raise HTTPException(
+        status_code=409,
+        detail="Payment state changed. Please retry.",
     )
 
     # Commit store-credit deduction now (only after successful payment); guard double-commit
