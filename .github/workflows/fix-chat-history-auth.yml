@@ -23,17 +23,11 @@ jobs:
         shell: python
         run: |
           from pathlib import Path
+          import re
           import subprocess
 
           path = Path('backend/server.py')
           text = path.read_text(encoding='utf-8')
-
-          old = '''@api_router.get("/chat/{session_id}")
-async def get_chat_history(session_id: str):
-    session = await db.chat_sessions.find_one({"session_id": session_id})
-    msgs = session.get("messages", []) if session else []
-    return {"session_id": session_id, "messages": [{"role": m.get("role"), "content": m.get("content")} for m in msgs]}
-'''
 
           new = '''@api_router.get("/chat/{session_id}")
 async def get_chat_history(session_id: str, current=Depends(get_current_user)):
@@ -49,13 +43,23 @@ async def get_chat_history(session_id: str, current=Depends(get_current_user)):
     return {"session_id": session_id, "messages": [{"role": m.get("role"), "content": m.get("content")} for m in msgs]}
 '''
 
-          if new in text:
-              print('Chat history ownership guard already present; nothing to change.')
-          elif old in text:
-              path.write_text(text.replace(old, new, 1), encoding='utf-8')
-              print('Chat history ownership guard applied.')
+          pattern = re.compile(
+              r'@api_router\.get\("/chat/\\{session_id\\}"\)\n'
+              r'async def get_chat_history\(session_id: str(?:, current=Depends\(get_current_user\))?\):\n'
+              r'.*?(?=\n@api_router\.|\Z)',
+              re.DOTALL,
+          )
+
+          match = pattern.search(text)
+          if not match:
+              raise SystemExit('Chat history endpoint was not found; refusing to modify server.py.')
+
+          current_block = match.group(0)
+          if 'current=Depends(get_current_user)' in current_block and '"user_id": current["id"]' in current_block:
+              print('Chat history ownership guard already present.')
           else:
-              raise SystemExit('Expected chat history block was not found; refusing to modify server.py.')
+              path.write_text(text[:match.start()] + new + text[match.end():], encoding='utf-8')
+              print('Chat history ownership guard applied.')
 
           subprocess.run(['python', '-m', 'py_compile', 'backend/server.py'], check=True)
           print('PY_COMPILE_OK')
@@ -66,8 +70,12 @@ async def get_chat_history(session_id: str, current=Depends(get_current_user)):
           git config user.name 'framewithmemories-ctrl'
           git config user.email 'framewithmemories@gmail.com'
           git add backend/server.py .github/workflows/fix-chat-history-auth.yml
-          git rm .github/workflows/fix-chat-history-auth.yml
-          git commit -m 'security: protect chat history by session owner'
-          git push origin HEAD:main
+          if git diff --cached --quiet; then
+            echo 'No source change was necessary.'
+          else
+            git rm .github/workflows/fix-chat-history-auth.yml
+            git commit -m 'security: protect chat history by session owner'
+            git push origin HEAD:main
+          fi
 
 # One-time trigger comment; this workflow removes itself after applying the fix.
