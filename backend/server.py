@@ -657,7 +657,16 @@ async def get_user(user_id: str, owner=Depends(verify_user_access)):
     return User(**user)
 
 @api_router.post("/designs", response_model=CustomDesign)
-async def create_design(design: CustomDesignCreate):
+async def create_design(
+    design: CustomDesignCreate,
+    current=Depends(get_current_user),
+):
+    if design.user_id != current["id"]:
+        raise HTTPException(
+            status_code=403,
+            detail="Not authorized to create a design for another account",
+        )
+
     design_obj = CustomDesign(**design.dict())
     await db.designs.insert_one(design_obj.dict())
     return design_obj
