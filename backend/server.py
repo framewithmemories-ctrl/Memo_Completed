@@ -1013,12 +1013,17 @@ async def get_user_chat_history(current=Depends(get_current_user)):
 
 
 @api_router.get("/chat/{session_id}")
-async def get_chat_history(session_id: str):
-    session = await db.chat_sessions.find_one({"session_id": session_id})
-    msgs = session.get("messages", []) if session else []
+async def get_chat_history(session_id: str, current=Depends(get_current_user)):
+    # SECURITY: chat sessions containing account-linked history must only be
+    # readable by the authenticated owner of that session.
+    session = await db.chat_sessions.find_one({
+        "session_id": session_id,
+        "user_id": current["id"],
+    })
+    if not session:
+        raise HTTPException(status_code=404, detail="Chat session not found")
+    msgs = session.get("messages", [])
     return {"session_id": session_id, "messages": [{"role": m.get("role"), "content": m.get("content")} for m in msgs]}
-
-
 
 @api_router.post("/orders", response_model=Order)
 async def create_order(order: OrderCreate, current=Depends(get_current_user)):
