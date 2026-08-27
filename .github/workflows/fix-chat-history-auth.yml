@@ -1,0 +1,71 @@
+name: One-time chat history authorization fix
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/fix-chat-history-auth.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Apply chat history ownership guard
+        shell: python
+        run: |
+          from pathlib import Path
+          import subprocess
+
+          path = Path('backend/server.py')
+          text = path.read_text(encoding='utf-8')
+
+          old = '''@api_router.get("/chat/{session_id}")
+async def get_chat_history(session_id: str):
+    session = await db.chat_sessions.find_one({"session_id": session_id})
+    msgs = session.get("messages", []) if session else []
+    return {"session_id": session_id, "messages": [{"role": m.get("role"), "content": m.get("content")} for m in msgs]}
+'''
+
+          new = '''@api_router.get("/chat/{session_id}")
+async def get_chat_history(session_id: str, current=Depends(get_current_user)):
+    # SECURITY: chat sessions containing account-linked history must only be
+    # readable by the authenticated owner of that session.
+    session = await db.chat_sessions.find_one({
+        "session_id": session_id,
+        "user_id": current["id"],
+    })
+    if not session:
+        raise HTTPException(status_code=404, detail="Chat session not found")
+    msgs = session.get("messages", [])
+    return {"session_id": session_id, "messages": [{"role": m.get("role"), "content": m.get("content")} for m in msgs]}
+'''
+
+          if new in text:
+              print('Chat history ownership guard already present; nothing to change.')
+          elif old in text:
+              path.write_text(text.replace(old, new, 1), encoding='utf-8')
+              print('Chat history ownership guard applied.')
+          else:
+              raise SystemExit('Expected chat history block was not found; refusing to modify server.py.')
+
+          subprocess.run(['python', '-m', 'py_compile', 'backend/server.py'], check=True)
+          print('PY_COMPILE_OK')
+
+      - name: Commit fix and remove one-time fixer
+        shell: bash
+        run: |
+          git config user.name 'framewithmemories-ctrl'
+          git config user.email 'framewithmemories@gmail.com'
+          git add backend/server.py .github/workflows/fix-chat-history-auth.yml
+          git rm .github/workflows/fix-chat-history-auth.yml
+          git commit -m 'security: protect chat history by session owner'
+          git push origin HEAD:main
