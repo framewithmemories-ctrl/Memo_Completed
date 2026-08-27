@@ -1,0 +1,53 @@
+name: One-time design authorization fix
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/fix-design-auth.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Apply authorization guard
+        shell: python
+        run: |
+          from pathlib import Path
+
+          path = Path('backend/server.py')
+          text = path.read_text(encoding='utf-8')
+
+          old = '''@api_router.post("/designs", response_model=CustomDesign)\nasync def create_design(design: CustomDesignCreate):\n    design_obj = CustomDesign(**design.dict())\n    await db.designs.insert_one(design_obj.dict())\n    return design_obj\n'''
+
+          new = '''@api_router.post("/designs", response_model=CustomDesign)\nasync def create_design(\n    design: CustomDesignCreate,\n    current=Depends(get_current_user),\n):\n    if design.user_id != current["id"]:\n        raise HTTPException(\n            status_code=403,\n            detail="Not authorized to create a design for another account",\n        )\n\n    design_obj = CustomDesign(**design.dict())\n    await db.designs.insert_one(design_obj.dict())\n    return design_obj\n'''
+
+          if new in text:
+              print('Design authorization guard already present; nothing to change.')
+          elif old in text:
+              path.write_text(text.replace(old, new, 1), encoding='utf-8')
+              print('Design authorization guard applied.')
+          else:
+              raise SystemExit('Expected create_design block was not found; refusing to modify server.py.')
+
+      - name: Commit fix
+        shell: bash
+        run: |
+          if git diff --quiet -- backend/server.py; then
+            echo 'No server.py change needed.'
+            exit 0
+          fi
+          git config user.name 'framewithmemories-ctrl'
+          git config user.email 'framewithmemories@gmail.com'
+          git add backend/server.py
+          git commit -m 'security: authorize custom design creation'
+          git push origin HEAD:main
