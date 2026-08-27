@@ -69,3 +69,5 @@ async def get_chat_history(session_id: str, current=Depends(get_current_user)):
           git rm .github/workflows/fix-chat-history-auth.yml
           git commit -m 'security: protect chat history by session owner'
           git push origin HEAD:main
+
+# One-time trigger comment; this workflow removes itself after applying the fix.
