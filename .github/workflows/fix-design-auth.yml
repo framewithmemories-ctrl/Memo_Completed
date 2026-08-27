@@ -1,4 +1,4 @@
-name: One-time design authorization fix
+name: One-time chat history authorization fix
 
 on:
   push:
@@ -19,35 +19,52 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Apply authorization guard
+      - name: Apply chat history ownership guard
         shell: python
         run: |
           from pathlib import Path
-
           path = Path('backend/server.py')
           text = path.read_text(encoding='utf-8')
 
-          old = '''@api_router.post("/designs", response_model=CustomDesign)\nasync def create_design(design: CustomDesignCreate):\n    design_obj = CustomDesign(**design.dict())\n    await db.designs.insert_one(design_obj.dict())\n    return design_obj\n'''
+          old = '''@api_router.get("/chat/{session_id}")
+async def get_chat_history(session_id: str):
+    session = await db.chat_sessions.find_one({"session_id": session_id})
+    msgs = session.get("messages", []) if session else []
+    return {"session_id": session_id, "messages": [{"role": m.get("role"), "content": m.get("content")} for m in msgs]}
+'''
 
-          new = '''@api_router.post("/designs", response_model=CustomDesign)\nasync def create_design(\n    design: CustomDesignCreate,\n    current=Depends(get_current_user),\n):\n    if design.user_id != current["id"]:\n        raise HTTPException(\n            status_code=403,\n            detail="Not authorized to create a design for another account",\n        )\n\n    design_obj = CustomDesign(**design.dict())\n    await db.designs.insert_one(design_obj.dict())\n    return design_obj\n'''
+          new = '''@api_router.get("/chat/{session_id}")
+async def get_chat_history(session_id: str, current=Depends(get_current_user)):
+    # SECURITY: chat sessions containing account-linked history must only be
+    # readable by the authenticated owner of that session.
+    session = await db.chat_sessions.find_one({
+        "session_id": session_id,
+        "user_id": current["id"],
+    })
+    if not session:
+        raise HTTPException(status_code=404, detail="Chat session not found")
+    msgs = session.get("messages", [])
+    return {"session_id": session_id, "messages": [{"role": m.get("role"), "content": m.get("content")} for m in msgs]}
+'''
 
           if new in text:
-              print('Design authorization guard already present; nothing to change.')
+              print('Chat history ownership guard already present.')
           elif old in text:
               path.write_text(text.replace(old, new, 1), encoding='utf-8')
-              print('Design authorization guard applied.')
+              print('Chat history ownership guard applied.')
           else:
-              raise SystemExit('Expected create_design block was not found; refusing to modify server.py.')
+              raise SystemExit('Expected chat history block was not found; refusing to modify server.py.')
 
-      - name: Commit fix
+          import py_compile
+          py_compile.compile('backend/server.py', doraise=True)
+          print('PY_COMPILE_OK')
+
+      - name: Commit fix and remove this one-time fixer
         shell: bash
         run: |
-          if git diff --quiet -- backend/server.py; then
-            echo 'No server.py change needed.'
-            exit 0
-          fi
           git config user.name 'framewithmemories-ctrl'
           git config user.email 'framewithmemories@gmail.com'
-          git add backend/server.py
-          git commit -m 'security: authorize custom design creation'
+          git add backend/server.py .github/workflows/fix-design-auth.yml
+          git rm .github/workflows/fix-design-auth.yml
+          git commit -m 'security: protect chat history by session owner'
           git push origin HEAD:main
