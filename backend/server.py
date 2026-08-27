@@ -2532,12 +2532,9 @@ async def startup_seed_admin():
                 "created_at": datetime.now(timezone.utc).isoformat(),
             })
             logger.info(f"Seeded admin account: {username}")
-        elif not verify_password(password, existing.get("password_hash", "")):
-            await db.admins.update_one(
-                {"username": username},
-                {"$set": {"password_hash": hash_password(password)}},
-            )
-            logger.info(f"Updated admin password for: {username}")
+        # Environment credentials are bootstrap credentials only. Once an admin
+        # record exists, never overwrite a database-managed password on restart.
+        # Password changes and recovery are persisted in MongoDB.
     except Exception as e:
         logger.error(f"Admin seed error: {e}")
 
