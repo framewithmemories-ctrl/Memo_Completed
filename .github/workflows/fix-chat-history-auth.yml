@@ -30,19 +30,21 @@ jobs:
           path = Path('backend/server.py')
           text = path.read_text(encoding='utf-8')
 
-          new = '''@api_router.get("/chat/{session_id}")
-async def get_chat_history(session_id: str, current=Depends(get_current_user)):
-    # SECURITY: chat sessions containing account-linked history must only be
-    # readable by the authenticated owner of that session.
-    session = await db.chat_sessions.find_one({
-        "session_id": session_id,
-        "user_id": current["id"],
-    })
-    if not session:
-        raise HTTPException(status_code=404, detail="Chat session not found")
-    msgs = session.get("messages", [])
-    return {"session_id": session_id, "messages": [{"role": m.get("role"), "content": m.get("content")} for m in msgs]}
-'''
+          new_lines = [
+              '@api_router.get("/chat/{session_id}")',
+              'async def get_chat_history(session_id: str, current=Depends(get_current_user)):',
+              '    # SECURITY: chat sessions containing account-linked history must only be',
+              '    # readable by the authenticated owner of that session.',
+              '    session = await db.chat_sessions.find_one({',
+              '        "session_id": session_id,',
+              '        "user_id": current["id"],',
+              '    })',
+              '    if not session:',
+              '        raise HTTPException(status_code=404, detail="Chat session not found")',
+              '    msgs = session.get("messages", [])',
+              '    return {"session_id": session_id, "messages": [{"role": m.get("role"), "content": m.get("content")} for m in msgs]}',
+          ]
+          new = "\n".join(new_lines) + "\n"
 
           pattern = re.compile(
               r'@api_router\.get\("/chat/\{session_id\}"\)\s*'
@@ -90,8 +92,5 @@ async def get_chat_history(session_id: str, current=Depends(get_current_user)):
             echo 'No source change was necessary.'
           else
             git commit -m 'security: protect chat history by session owner'
+            git push origin HEAD:main
           fi
-          if ! git diff --cached --quiet; then
-            git commit -m 'chore: remove completed chat history fixer'
-          fi
-          git push origin HEAD:main
