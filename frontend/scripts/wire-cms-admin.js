@@ -45,24 +45,17 @@ if (!heroText.includes('<CmsAnnouncementBanner />')) throw new Error('CMS announ
 const heroSignature = 'export const HeroSection = () => {';
 if (!heroText.includes(heroSignature)) throw new Error('Unable to locate HeroSection');
 
-// Render immediately using the last successful CMS value (or safe non-promotional defaults),
-// then refresh CMS content in the background. This prevents a sleeping Render service from
-// making the entire homepage appear to hang for 20-30+ seconds.
+// Render a safe non-promotional default while the current CMS value is fetched.
+// Do NOT hydrate the homepage from localStorage: that made an old admin-uploaded
+// hero image appear for 2-5 seconds before the fresh CMS response replaced it.
+// The current CMS endpoint is authoritative on every page load.
 if (!heroText.includes('const [cmsHero, setCmsHero]')) {
   const heroRuntime = `const CMS_DEFAULT_HERO = {
     hero_title: 'Turn Your Moments Into Memories ❤️',
     hero_subtitle: 'Beautifully crafted photo frames and personalized gifts, made with love in Coimbatore.',
     hero_image_url: ''
   };
-  const getInitialCmsHero = () => {
-    if (typeof window === 'undefined') return CMS_DEFAULT_HERO;
-    try {
-      const cached = JSON.parse(window.localStorage.getItem('memories_cms_homepage') || 'null');
-      return cached?.homepage ? { ...CMS_DEFAULT_HERO, ...cached.homepage } : CMS_DEFAULT_HERO;
-    } catch (_) {
-      return CMS_DEFAULT_HERO;
-    }
-  };
+  const getInitialCmsHero = () => CMS_DEFAULT_HERO;
   const [cmsHero, setCmsHero] = useState(getInitialCmsHero);
   useEffect(() => {
     let cancelled = false;
@@ -79,7 +72,6 @@ if (!heroText.includes('const [cmsHero, setCmsHero]')) {
         if (cancelled || !data?.homepage) return;
         const next = { ...CMS_DEFAULT_HERO, ...data.homepage };
         setCmsHero(next);
-        try { window.localStorage.setItem('memories_cms_homepage', JSON.stringify({ homepage: next })); } catch (_) {}
       })
       .catch(() => {})
       .finally(() => clearTimeout(timeoutId));
@@ -121,4 +113,4 @@ fs.writeFileSync(heroFile, heroText, 'utf8');
 // Do not rewrite App.js here. App.js is authoritative source and must remain valid JSX.
 // The permanent delivery claim is intentionally left unchanged here; it should be controlled
 // by the CMS if/when a dedicated header-promotion field is introduced.
-console.log('CMS Admin, announcement banner and homepage hero wiring applied; homepage CMS is now non-blocking.');
+console.log('CMS Admin, announcement banner and homepage hero wiring applied; homepage CMS is now non-blocking and never starts from stale localStorage.');
