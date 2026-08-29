@@ -1,0 +1,202 @@
+name: Bootstrap Shipping Management
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/bootstrap-shipping.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  bootstrap:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Patch shipping foundation into app
+        shell: python
+        run: |
+          from pathlib import Path
+
+          server = Path('backend/server.py')
+          admin = Path('frontend/src/components/AdminPanel.js')
+          workflow = Path('.github/workflows/bootstrap-shipping.yml')
+
+          shipping_routes = r'''
+
+# ============================ Shipping Management Foundation ============================
+# shipping_management_foundation_v1
+class ManualShipmentCreate(BaseModel):
+    order_id: str
+    provider: str = "manual"
+    awb_number: Optional[str] = None
+    tracking_url: Optional[str] = None
+
+class ShipmentStatusUpdate(BaseModel):
+    status: str
+
+
+def _default_shipping_config():
+    return {
+        "providers": {
+            "manual": {"enabled": True, "api_configured": False},
+            "shiprocket": {"enabled": False, "api_configured": False},
+            "delhivery": {"enabled": False, "api_configured": False},
+        },
+        "default_shipping_charge": 0.0,
+        "free_shipping_threshold": 0.0,
+        "updated_at": datetime.now(timezone.utc),
+    }
+
+
+@api_router.get("/admin/shipping/config")
+async def admin_shipping_config(admin=Depends(require_admin)):
+    config = await db.shipping_settings.find_one({"key": "default"})
+    if not config:
+        config = _default_shipping_config()
+        config["key"] = "default"
+        await db.shipping_settings.insert_one(config)
+    config.pop("_id", None)
+    return config
+
+
+@api_router.put("/admin/shipping/config")
+async def update_admin_shipping_config(payload: dict, admin=Depends(require_admin)):
+    current = _default_shipping_config()
+    stored = await db.shipping_settings.find_one({"key": "default"})
+    if stored:
+        current.update({k: v for k, v in stored.items() if k != "_id"})
+    providers = payload.get("providers", current.get("providers", {}))
+    # Only allow known providers in this foundation; credentials are intentionally not accepted here.
+    clean_providers = {}
+    for key in ("manual", "shiprocket", "delhivery"):
+        incoming = providers.get(key, current.get("providers", {}).get(key, {})) or {}
+        clean_providers[key] = {
+            "enabled": bool(incoming.get("enabled", key == "manual")),
+            "api_configured": bool(incoming.get("api_configured", False)),
+        }
+    current.update({
+        "key": "default",
+        "providers": clean_providers,
+        "default_shipping_charge": max(0.0, float(payload.get("default_shipping_charge", current.get("default_shipping_charge", 0.0)) or 0.0)),
+        "free_shipping_threshold": max(0.0, float(payload.get("free_shipping_threshold", current.get("free_shipping_threshold", 0.0)) or 0.0)),
+        "updated_at": datetime.now(timezone.utc),
+    })
+    await db.shipping_settings.replace_one({"key": "default"}, current, upsert=True)
+    current.pop("_id", None)
+    return current
+
+
+@api_router.get("/admin/shipping/shipments")
+async def admin_shipping_shipments(admin=Depends(require_admin)):
+    shipments = await db.shipments.find({}).sort("created_at", -1).limit(200).to_list(200)
+    for shipment in shipments:
+        shipment.pop("_id", None)
+    # Enrich with customer names without exposing passwords/secrets.
+    user_ids = list({s.get("user_id") for s in shipments if s.get("user_id")})
+    users_by_id = {}
+    if user_ids:
+        async for u in db.users.find({"id": {"$in": user_ids}}, {"id": 1, "name": 1}):
+            users_by_id[u.get("id")] = u.get("name")
+    for shipment in shipments:
+        shipment["customer_name"] = users_by_id.get(shipment.get("user_id"), shipment.get("customer_name"))
+    return {"shipments": shipments}
+
+
+@api_router.post("/admin/shipping/shipments/manual")
+async def create_admin_shipment(payload: ManualShipmentCreate, admin=Depends(require_admin)):
+    order = await db.orders.find_one({"id": payload.order_id})
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+    if order.get("payment_status") not in (None, "paid"):
+        raise HTTPException(status_code=409, detail="Shipment can only be created for a paid order")
+    existing = await db.shipments.find_one({"order_id": payload.order_id, "status": {"$nin": ["cancelled", "failed"]}})
+    if existing:
+        raise HTTPException(status_code=409, detail="An active shipment already exists for this order")
+    if payload.provider not in ("manual", "shiprocket", "delhivery"):
+        raise HTTPException(status_code=400, detail="Unsupported shipping provider")
+    now = datetime.now(timezone.utc)
+    shipment = {
+        "id": str(uuid.uuid4()),
+        "order_id": payload.order_id,
+        "user_id": order.get("user_id"),
+        "provider": payload.provider,
+        "awb_number": payload.awb_number,
+        "tracking_url": payload.tracking_url,
+        "status": "pending",
+        "created_at": now,
+        "updated_at": now,
+        "created_by": admin.get("sub"),
+    }
+    await db.shipments.insert_one(shipment)
+    await db.orders.update_one({"id": payload.order_id}, {"$set": {"shipping_status": "pending"}})
+    shipment.pop("_id", None)
+    return shipment
+
+
+@api_router.patch("/admin/shipping/shipments/{shipment_id}/status")
+async def update_admin_shipment_status(shipment_id: str, payload: ShipmentStatusUpdate, admin=Depends(require_admin)):
+    allowed = {"pending", "ready", "picked_up", "in_transit", "out_for_delivery", "delivered", "failed", "cancelled"}
+    if payload.status not in allowed:
+        raise HTTPException(status_code=400, detail="Invalid shipment status")
+    shipment = await db.shipments.find_one({"id": shipment_id})
+    if not shipment:
+        raise HTTPException(status_code=404, detail="Shipment not found")
+    now = datetime.now(timezone.utc)
+    await db.shipments.update_one({"id": shipment_id}, {"$set": {"status": payload.status, "updated_at": now}})
+    order_shipping = "delivered" if payload.status == "delivered" else "shipped" if payload.status in {"picked_up", "in_transit", "out_for_delivery"} else "pending"
+    if payload.status in {"failed", "cancelled"}:
+        order_shipping = "pending"
+    await db.orders.update_one({"id": shipment.get("order_id")}, {"$set": {"shipping_status": order_shipping}})
+    updated = await db.shipments.find_one({"id": shipment_id})
+    updated.pop("_id", None)
+    return updated
+
+'''
+
+          s = server.read_text()
+          if 'shipping_management_foundation_v1' not in s:
+              marker = 'app.include_router(api_router)'
+              if marker not in s:
+                  raise SystemExit('Could not find router registration in backend/server.py')
+              s = s.replace(marker, shipping_routes + '\n' + marker, 1)
+              server.write_text(s)
+
+          a = admin.read_text()
+          if "./ShippingManagement" not in a:
+              a = a.replace("import axios from 'axios';", "import axios from 'axios';\nimport ShippingManagement from './ShippingManagement';", 1)
+          a = a.replace('grid-cols-7', 'grid-cols-8', 1)
+          old_tabs = '<TabsTrigger value="content" className="flex items-center"><Gift className="w-4 h-4 mr-2" />Content</TabsTrigger>'
+          new_tabs = old_tabs + '<TabsTrigger value="shipping" className="flex items-center"><Truck className="w-4 h-4 mr-2" />Shipping</TabsTrigger>'
+          if old_tabs in a and 'value="shipping"' not in a:
+              a = a.replace(old_tabs, new_tabs, 1)
+          a = a.replace('Shield, BarChart3, Users, Package, Star, ShoppingCart, Eye, Check, X, Edit, Trash2, Plus, Download,', 'Shield, BarChart3, Users, Package, Star, ShoppingCart, Eye, Check, X, Edit, Trash2, Plus, Download,')
+          # Add Truck icon if not already imported.
+          if 'Truck,' not in a.split('} from "lucide-react"')[0]:
+              a = a.replace('Gift, Megaphone', 'Gift, Megaphone, Truck', 1)
+          content_marker = '<TabsContent value="content" className="mt-6">{renderContentManagement()}</TabsContent>'
+          shipping_content = content_marker + '<TabsContent value="shipping" className="mt-6"><ShippingManagement /></TabsContent>'
+          if content_marker in a and '<TabsContent value="shipping"' not in a:
+              a = a.replace(content_marker, shipping_content, 1)
+          admin.write_text(a)
+
+          # Remove this one-time bootstrap workflow after the patch is committed.
+          workflow.unlink(missing_ok=True)
+
+      - name: Commit and push
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add backend/server.py frontend/src/components/AdminPanel.js .github/workflows/bootstrap-shipping.yml
+          if git diff --cached --quiet; then
+            echo "No shipping patch needed."
+            exit 0
+          fi
+          git commit -m "feat: add shipping management foundation"
+          git push origin main
