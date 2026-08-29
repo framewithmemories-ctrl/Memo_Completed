@@ -1091,19 +1091,9 @@ async def create_order(order: OrderCreate, current=Depends(get_current_user)):
     
     await db.orders.insert_one(order_obj.dict())
     
-    # Update user points
-    if order.user_id:
-        user = await db.users.find_one({"id": order.user_id})
-        if user:
-            new_points = user.get("points", 0) + points_earned
-            # Update tier based on total points
-            new_tier = "Platinum" if new_points >= 5000 else "Gold" if new_points >= 2000 else "Silver"
-            
-            await db.users.update_one(
-                {"id": order.user_id},
-                {"$set": {"points": new_points, "tier": new_tier}}
-            )
-    
+    # Purchase points are awarded only after verified payment.
+    # Do not mutate the user's reward balance while an order is unpaid.
+
     return order_obj
 
 class PaymentVerifyRequest(BaseModel):
