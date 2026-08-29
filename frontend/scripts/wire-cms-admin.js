@@ -109,9 +109,13 @@ const cmsSubtitle = '<p className="text-xl text-gray-700 leading-relaxed font-me
 if (heroText.includes(legacySubtitle)) heroText = heroText.replace(legacySubtitle, cmsSubtitle);
 
 // Remove the old image element and carousel dots. Show a neutral skeleton until CMS media arrives.
-const oldImageMarkup = /<img src=\{heroImages\[currentImageIndex\]\} alt="Beautiful custom photo frames showcase" className="w-full h-full object-cover rounded-2xl shadow-lg transition-all duration-1000"\/><div className="flex justify-center space-x-2 mt-4">\{heroImages\.map\(\(_,index\)=>[^<]*<button key=\{index\}[^>]*\/>\)\}</div>/;
-if (oldImageMarkup.test(heroText)) {
-  heroText = heroText.replace(oldImageMarkup, '{cmsHeroLoading ? <div className="w-full h-full rounded-2xl bg-rose-50 animate-pulse" aria-label="Loading homepage image" /> : cmsHero.hero_image_url ? <img src={cmsHero.hero_image_url} alt="Memories homepage" className="w-full h-full object-cover rounded-2xl shadow-lg" /> : <div className="w-full h-full rounded-2xl bg-rose-50 flex items-center justify-center text-rose-300 font-medium">Memories</div>}');
+const oldImageStart = '<img src={heroImages[currentImageIndex]}';
+const oldImageEnd = '</div><div className="absolute -top-6 -right-6';
+const imageStartIndex = heroText.indexOf(oldImageStart);
+const imageEndIndex = imageStartIndex === -1 ? -1 : heroText.indexOf(oldImageEnd, imageStartIndex);
+if (imageStartIndex !== -1 && imageEndIndex !== -1) {
+  const cmsImageMarkup = '{cmsHeroLoading ? <div className="w-full h-full rounded-2xl bg-rose-50 animate-pulse" aria-label="Loading homepage image" /> : cmsHero.hero_image_url ? <img src={cmsHero.hero_image_url} alt="Memories homepage" className="w-full h-full object-cover rounded-2xl shadow-lg" /> : <div className="w-full h-full rounded-2xl bg-rose-50 flex items-center justify-center text-rose-300 font-medium">Memories</div>}';
+  heroText = heroText.slice(0, imageStartIndex) + cmsImageMarkup + heroText.slice(imageEndIndex);
 }
 
 if (!heroText.includes('const heroImages = cmsHero.hero_image_url ? [cmsHero.hero_image_url] : [];')) throw new Error('CMS homepage image wiring verification failed');
