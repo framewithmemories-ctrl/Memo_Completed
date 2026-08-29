@@ -1,0 +1,64 @@
+name: Security - legacy order rewards fix
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/fix-legacy-order-rewards-once.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Remove pre-payment reward award
+        shell: python
+        run: |
+          from pathlib import Path
+          import re
+
+          path = Path("backend/server.py")
+          text = path.read_text(encoding="utf-8")
+
+          marker = "    # Update user points\n"
+          start = text.find(marker)
+          if start == -1:
+              raise SystemExit("Expected legacy pre-payment reward block not found; refusing to patch")
+
+          end_marker = "    return order_obj\n"
+          end = text.find(end_marker, start)
+          if end == -1:
+              raise SystemExit("Expected order return after reward block not found; refusing to patch")
+
+          replacement = (
+              "    # Purchase points are awarded only after verified payment.\n"
+              "    # Do not mutate the user's reward balance while an order is unpaid.\n"
+              "\n"
+          )
+          text = text[:start] + replacement + text[end:]
+          path.write_text(text, encoding="utf-8")
+
+          if "# Update user points\n" in text:
+              raise SystemExit("Legacy pre-payment reward block still present")
+
+          print("Legacy /api/orders no longer awards points before payment verification")
+
+      - name: Syntax check
+        run: python -m py_compile backend/server.py
+
+      - name: Commit patch and remove one-time workflow
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add backend/server.py
+          git commit -m "security: prevent rewards on unpaid legacy orders"
+          git rm .github/workflows/fix-legacy-order-rewards-once.yml
+          git commit -m "chore: remove completed one-time reward fix"
+          git push
