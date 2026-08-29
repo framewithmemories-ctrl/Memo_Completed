@@ -1,0 +1,131 @@
+name: Fix reward points sync
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/fix-reward-points-sync.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  sync-reward-points:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 1
+
+      - name: Patch auth/profile reward synchronization
+        shell: python
+        run: |
+          from pathlib import Path
+
+          auth = Path("frontend/src/context/AuthContext.js")
+          text = auth.read_text(encoding="utf-8")
+
+          old = '''  const logout = useCallback(() => {
+    localStorage.removeItem('memoriesAuth');
+    setAuthHeader(null);
+    setToken(null);
+    setUser(null);
+    syncLegacyProfile(null);
+  }, []);
+
+  return (
+    <AuthContext.Provider value={{ user, token, loading, login, register, changePassword, logout, isAuthenticated: !!user }}>
+'''
+          new = '''  const refreshUser = useCallback(async () => {
+    if (!token) return null;
+    const res = await axios.get(`${API}/auth/me`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    const freshUser = res.data.user;
+    setUser(freshUser);
+    localStorage.setItem('memoriesAuth', JSON.stringify({ token, user: freshUser }));
+    syncLegacyProfile(freshUser);
+    return freshUser;
+  }, [token]);
+
+  const logout = useCallback(() => {
+    localStorage.removeItem('memoriesAuth');
+    setAuthHeader(null);
+    setToken(null);
+    setUser(null);
+    syncLegacyProfile(null);
+  }, []);
+
+  // Reconcile the cached profile whenever the user returns to the tab/window.
+  // This prevents the Profile tab from displaying stale reward points after a
+  // payment/order change made elsewhere while Wallet reads the current DB value.
+  useEffect(() => {
+    if (!token) return undefined;
+    const reconcile = () => { refreshUser().catch(() => {}); };
+    window.addEventListener('focus', reconcile);
+    document.addEventListener('visibilitychange', reconcile);
+    return () => {
+      window.removeEventListener('focus', reconcile);
+      document.removeEventListener('visibilitychange', reconcile);
+    };
+  }, [token, refreshUser]);
+
+  return (
+    <AuthContext.Provider value={{ user, token, loading, login, register, changePassword, refreshUser, logout, isAuthenticated: !!user }}>
+'''
+          if old not in text:
+              raise SystemExit("AuthContext anchor not found; refusing to patch")
+          auth.write_text(text.replace(old, new, 1), encoding="utf-8")
+
+          account = Path("frontend/src/components/AccountButton.js")
+          text = account.read_text(encoding="utf-8")
+
+          old = '''  const { user, isAuthenticated, token, login, register, changePassword, logout } = useAuth();
+'''
+          new = '''  const { user, isAuthenticated, token, login, register, changePassword, refreshUser, logout } = useAuth();
+'''
+          if old not in text:
+              raise SystemExit("AccountButton auth hook anchor not found; refusing to patch")
+          text = text.replace(old, new, 1)
+
+          old = '''          {activeTab === 'wallet' && <DigitalWallet userId={user.id} />}
+'''
+          new = '''          {activeTab === 'wallet' && <DigitalWallet userId={user.id} onBalanceUpdate={(wallet) => {
+            setUser((prev) => prev ? {
+              ...prev,
+              wallet_balance: wallet.balance,
+              points: wallet.rewardPoints,
+              store_credits: wallet.storeCredits,
+              tier: wallet.tier,
+              total_spent: wallet.totalSpent,
+            } : prev);
+          }} />}
+'''
+          if old not in text:
+              raise SystemExit("AccountButton wallet anchor not found; refusing to patch")
+          text = text.replace(old, new, 1)
+
+          account.write_text(text, encoding="utf-8")
+          print("Reward points synchronization patch applied")
+
+      - name: Build frontend
+        working-directory: frontend
+        run: |
+          npm ci
+          CI=true npm run build
+
+      - name: Commit and push
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add frontend/src/context/AuthContext.js frontend/src/components/AccountButton.js
+          if git diff --cached --quiet; then
+            echo "No source change needed"
+            exit 0
+          fi
+          git commit -m "fix: synchronize profile and wallet reward points"
+          git push origin main
