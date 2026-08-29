@@ -72,7 +72,6 @@ async def update_admin_shipping_config(payload: dict, admin=Depends(require_admi
     if stored:
         current.update({k: v for k, v in stored.items() if k != "_id"})
     providers = payload.get("providers", current.get("providers", {}))
-    # Only allow known providers in this foundation; credentials are intentionally not accepted here.
     clean_providers = {}
     for key in ("manual", "shiprocket", "delhivery"):
         incoming = providers.get(key, current.get("providers", {}).get(key, {})) or {}
@@ -97,7 +96,6 @@ async def admin_shipping_shipments(admin=Depends(require_admin)):
     shipments = await db.shipments.find({}).sort("created_at", -1).limit(200).to_list(200)
     for shipment in shipments:
         shipment.pop("_id", None)
-    # Enrich with customer names without exposing passwords/secrets.
     user_ids = list({s.get("user_id") for s in shipments if s.get("user_id")})
     users_by_id = {}
     if user_ids:
@@ -175,8 +173,6 @@ async def update_admin_shipment_status(shipment_id: str, payload: ShipmentStatus
           new_tabs = old_tabs + '<TabsTrigger value="shipping" className="flex items-center"><Truck className="w-4 h-4 mr-2" />Shipping</TabsTrigger>'
           if old_tabs in a and 'value="shipping"' not in a:
               a = a.replace(old_tabs, new_tabs, 1)
-          a = a.replace('Shield, BarChart3, Users, Package, Star, ShoppingCart, Eye, Check, X, Edit, Trash2, Plus, Download,', 'Shield, BarChart3, Users, Package, Star, ShoppingCart, Eye, Check, X, Edit, Trash2, Plus, Download,')
-          # Add Truck icon if not already imported.
           if 'Truck,' not in a.split('} from "lucide-react"')[0]:
               a = a.replace('Gift, Megaphone', 'Gift, Megaphone, Truck', 1)
           content_marker = '<TabsContent value="content" className="mt-6">{renderContentManagement()}</TabsContent>'
@@ -185,7 +181,6 @@ async def update_admin_shipment_status(shipment_id: str, payload: ShipmentStatus
               a = a.replace(content_marker, shipping_content, 1)
           admin.write_text(a)
 
-          # Remove this one-time bootstrap workflow after the patch is committed.
           workflow.unlink(missing_ok=True)
 
       - name: Commit and push
@@ -200,3 +195,5 @@ async def update_admin_shipment_status(shipment_id: str, payload: ShipmentStatus
           fi
           git commit -m "feat: add shipping management foundation"
           git push origin main
+
+# Trigger refresh for the one-time bootstrap workflow.
