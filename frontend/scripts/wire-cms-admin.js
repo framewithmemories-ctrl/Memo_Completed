@@ -45,10 +45,8 @@ if (!heroText.includes('<CmsAnnouncementBanner />')) throw new Error('CMS announ
 const heroSignature = 'export const HeroSection = () => {';
 if (!heroText.includes(heroSignature)) throw new Error('Unable to locate HeroSection');
 
-// Render a safe non-promotional default while the current CMS value is fetched.
-// Do NOT hydrate the homepage from localStorage: that made an old admin-uploaded
-// hero image appear for 2-5 seconds before the fresh CMS response replaced it.
-// The current CMS endpoint is authoritative on every page load.
+// The CMS endpoint is authoritative. Never hydrate the homepage from localStorage and
+// never paint the old hard-coded hero image while the CMS request is in flight.
 if (!heroText.includes('const [cmsHero, setCmsHero]')) {
   const heroRuntime = `const CMS_DEFAULT_HERO = {
     hero_title: 'Turn Your Moments Into Memories ❤️',
@@ -57,6 +55,7 @@ if (!heroText.includes('const [cmsHero, setCmsHero]')) {
   };
   const getInitialCmsHero = () => CMS_DEFAULT_HERO;
   const [cmsHero, setCmsHero] = useState(getInitialCmsHero);
+  const [cmsHeroLoading, setCmsHeroLoading] = useState(true);
   useEffect(() => {
     let cancelled = false;
     const controller = new AbortController();
@@ -64,17 +63,22 @@ if (!heroText.includes('const [cmsHero, setCmsHero]')) {
     const backend = process.env.REACT_APP_BACKEND_URL;
     if (!backend) {
       clearTimeout(timeoutId);
+      setCmsHeroLoading(false);
       return undefined;
     }
     fetch(\`${'${'}backend}/api/cms\`, { signal: controller.signal, cache: 'no-store' })
       .then((r) => r.ok ? r.json() : null)
       .then((data) => {
-        if (cancelled || !data?.homepage) return;
-        const next = { ...CMS_DEFAULT_HERO, ...data.homepage };
-        setCmsHero(next);
+        if (cancelled) return;
+        if (data?.homepage) setCmsHero({ ...CMS_DEFAULT_HERO, ...data.homepage });
       })
       .catch(() => {})
-      .finally(() => clearTimeout(timeoutId));
+      .finally(() => {
+        if (!cancelled) {
+          clearTimeout(timeoutId);
+          setCmsHeroLoading(false);
+        }
+      });
     return () => {
       cancelled = true;
       controller.abort();
@@ -84,12 +88,17 @@ if (!heroText.includes('const [cmsHero, setCmsHero]')) {
   heroText = heroText.replace(heroSignature, `${heroSignature}\n  ${heroRuntime}`);
 }
 
-if (!heroText.includes('const heroImages = [')) throw new Error('Unable to locate hero image list');
-heroText = heroText.replace('const heroImages = [', 'const defaultHeroImages = [');
-heroText = heroText.replace(
-  '  ];\n  useEffect(() => { const interval = setInterval(() => setCurrentImageIndex(prev => (prev + 1) % heroImages.length), 4000); return () => clearInterval(interval); }, []);',
-  '  ];\n  const heroImages = cmsHero.hero_image_url ? [cmsHero.hero_image_url] : defaultHeroImages;\n  useEffect(() => { const interval = setInterval(() => setCurrentImageIndex(prev => (prev + 1) % heroImages.length), 4000); return () => clearInterval(interval); }, [heroImages.length]);'
-);
+// Replace the legacy hard-coded image carousel with the single authoritative CMS image.
+const oldImageBlock = /  const (?:defaultHeroImages|heroImages) = \[[\s\S]*?\n  \];\n  useEffect\(\(\) => \{ const interval = setInterval\(\(\) => setCurrentImageIndex\(prev => \(prev \+ 1\) % heroImages\.length\), 4000\); return \(\) => clearInterval\(interval\); \}, \[[^\]]*\]\);/;
+if (oldImageBlock.test(heroText)) {
+  heroText = heroText.replace(oldImageBlock, '  const heroImages = cmsHero.hero_image_url ? [cmsHero.hero_image_url] : [];');
+} else if (!heroText.includes('const heroImages = cmsHero.hero_image_url ? [cmsHero.hero_image_url] : [];')) {
+  const oldArrayStart = heroText.indexOf('  const heroImages = [');
+  if (oldArrayStart === -1) throw new Error('Unable to locate legacy hero image list');
+  const oldArrayEnd = heroText.indexOf('  ];', oldArrayStart);
+  if (oldArrayEnd === -1) throw new Error('Unable to locate end of legacy hero image list');
+  heroText = heroText.slice(0, oldArrayStart) + '  const heroImages = cmsHero.hero_image_url ? [cmsHero.hero_image_url] : [];\n' + heroText.slice(oldArrayEnd + 5);
+}
 
 const legacyTitle = '<h1 className="text-5xl md:text-7xl font-bold text-gray-900 leading-tight">Create <span className="bg-gradient-to-r from-rose-600 via-pink-600 to-orange-500 bg-clip-text text-transparent"> Beautiful </span>Memories with <span className="bg-gradient-to-r from-purple-600 to-pink-600 bg-clip-text text-transparent"> Custom </span>Photo Frames</h1>';
 const cmsTitle = '<h1 className="text-5xl md:text-7xl font-bold text-gray-900 leading-tight">{cmsHero.hero_title || CMS_DEFAULT_HERO.hero_title}</h1>';
@@ -99,9 +108,17 @@ const legacySubtitle = '<p className="text-xl text-gray-700 leading-relaxed font
 const cmsSubtitle = '<p className="text-xl text-gray-700 leading-relaxed font-medium">{cmsHero.hero_subtitle || CMS_DEFAULT_HERO.hero_subtitle}</p>';
 if (heroText.includes(legacySubtitle)) heroText = heroText.replace(legacySubtitle, cmsSubtitle);
 
-if (!heroText.includes('const heroImages = cmsHero.hero_image_url ? [cmsHero.hero_image_url] : defaultHeroImages;')) throw new Error('CMS homepage image wiring verification failed');
+// Remove the old image element and carousel dots. Show a neutral skeleton until CMS media arrives.
+const oldImageMarkup = /<img src=\{heroImages\[currentImageIndex\]\} alt="Beautiful custom photo frames showcase" className="w-full h-full object-cover rounded-2xl shadow-lg transition-all duration-1000"\/><div className="flex justify-center space-x-2 mt-4">\{heroImages\.map\(\(_,index\)=>[^<]*<button key=\{index\}[^>]*\/>\)\}</div>/;
+if (oldImageMarkup.test(heroText)) {
+  heroText = heroText.replace(oldImageMarkup, '{cmsHeroLoading ? <div className="w-full h-full rounded-2xl bg-rose-50 animate-pulse" aria-label="Loading homepage image" /> : cmsHero.hero_image_url ? <img src={cmsHero.hero_image_url} alt="Memories homepage" className="w-full h-full object-cover rounded-2xl shadow-lg" /> : <div className="w-full h-full rounded-2xl bg-rose-50 flex items-center justify-center text-rose-300 font-medium">Memories</div>}');
+}
+
+if (!heroText.includes('const heroImages = cmsHero.hero_image_url ? [cmsHero.hero_image_url] : [];')) throw new Error('CMS homepage image wiring verification failed');
 if (!heroText.includes('{cmsHero.hero_title || CMS_DEFAULT_HERO.hero_title}')) throw new Error('CMS homepage title wiring verification failed');
 if (!heroText.includes('{cmsHero.hero_subtitle || CMS_DEFAULT_HERO.hero_subtitle}')) throw new Error('CMS homepage subtitle wiring verification failed');
+if (!heroText.includes('cmsHeroLoading')) throw new Error('CMS homepage loading-state wiring verification failed');
+if (heroText.includes('images.unsplash.com/photo-1513519245088-0e12902e5a38')) throw new Error('Legacy hero image was not removed');
 
 // Remove the non-CMS promotional badges around the hero image. Discounts and delivery
 // offers should only appear when intentionally configured as a current promotion.
@@ -111,6 +128,4 @@ if (heroText.includes(heroPromoBadges)) heroText = heroText.replace(heroPromoBad
 fs.writeFileSync(heroFile, heroText, 'utf8');
 
 // Do not rewrite App.js here. App.js is authoritative source and must remain valid JSX.
-// The permanent delivery claim is intentionally left unchanged here; it should be controlled
-// by the CMS if/when a dedicated header-promotion field is introduced.
-console.log('CMS Admin, announcement banner and homepage hero wiring applied; homepage CMS is now non-blocking and never starts from stale localStorage.');
+console.log('CMS Admin, announcement banner and homepage hero wiring applied; legacy hero image removed and homepage now waits for authoritative CMS media.');
