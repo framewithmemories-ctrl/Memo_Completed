@@ -14,18 +14,12 @@ if (!adminText.includes('import ContentManagement from "./ContentManagement";'))
 
 const start = adminText.indexOf('  const renderContentManagement = () => (');
 const end = adminText.indexOf('\n\n  if (!isAuthenticated)', start);
-if (start === -1 || end === -1) {
-  throw new Error('Unable to locate AdminPanel CMS placeholder block');
-}
-
-const replacement = '  const renderContentManagement = () => <ContentManagement API={API} authConfig={adminAuthConfig} />;';
-adminText = adminText.slice(0, start) + replacement + adminText.slice(end);
+if (start === -1 || end === -1) throw new Error('Unable to locate AdminPanel CMS placeholder block');
+adminText = adminText.slice(0, start) + '  const renderContentManagement = () => <ContentManagement API={API} authConfig={adminAuthConfig} />;' + adminText.slice(end);
 fs.writeFileSync(adminFile, adminText, 'utf8');
 
 const updatedAdmin = fs.readFileSync(adminFile, 'utf8');
-if (!updatedAdmin.includes('ContentManagement API={API} authConfig={adminAuthConfig}')) {
-  throw new Error('CMS Admin wiring verification failed');
-}
+if (!updatedAdmin.includes('ContentManagement API={API} authConfig={adminAuthConfig}')) throw new Error('CMS Admin wiring verification failed');
 
 // Customer-facing announcement banner and homepage hero wiring.
 const heroFile = path.join(__dirname, '..', 'src', 'components', 'MainComponents.js');
@@ -45,9 +39,8 @@ if (!heroText.includes('<CmsAnnouncementBanner />')) throw new Error('CMS announ
 const heroSignature = 'export const HeroSection = () => {';
 if (!heroText.includes(heroSignature)) throw new Error('Unable to locate HeroSection');
 
-// The CMS endpoint is authoritative. Reuse the last successfully loaded CMS hero from
-// localStorage so returning visitors see an image immediately, then refresh it in the
-// background. A new CMS image is preloaded before it replaces the visible image.
+// CMS is authoritative. Returning visitors reuse the last successful hero immediately,
+// while the current CMS record and image are refreshed in the background.
 if (!heroText.includes('const CMS_HERO_CACHE_KEY')) {
   const heroRuntime = `const CMS_DEFAULT_HERO = {
     hero_title: 'Turn Your Moments Into Memories ❤️',
@@ -76,6 +69,8 @@ if (!heroText.includes('const CMS_HERO_CACHE_KEY')) {
     const preloadImage = (url) => new Promise((resolve) => {
       if (!url) return resolve(false);
       const image = new Image();
+      image.decoding = 'async';
+      image.fetchPriority = 'high';
       image.onload = () => resolve(true);
       image.onerror = () => resolve(false);
       image.src = url;
@@ -85,7 +80,7 @@ if (!heroText.includes('const CMS_HERO_CACHE_KEY')) {
       setCmsHeroLoading(false);
       return undefined;
     }
-    fetch(\`${'${'}backend}/api/cms\`, { signal: controller.signal, cache: 'no-store' })
+    fetch(\`${'${'}backend}/api/cms\`, { signal: controller.signal, cache: 'no-store', headers: { Accept: 'application/json' } })
       .then((r) => r.ok ? r.json() : null)
       .then(async (data) => {
         if (cancelled || !data?.homepage) return;
@@ -107,7 +102,7 @@ if (!heroText.includes('const CMS_HERO_CACHE_KEY')) {
       .finally(() => {
         if (!cancelled) {
           clearTimeout(timeoutId);
-          setCmsHeroLoading((current) => initialCmsHero.hero_image_url ? false : current);
+          if (initialCmsHero.hero_image_url) setCmsHeroLoading(false);
         }
       });
     return () => {
@@ -119,7 +114,7 @@ if (!heroText.includes('const CMS_HERO_CACHE_KEY')) {
   heroText = heroText.replace(heroSignature, `${heroSignature}\n  ${heroRuntime}`);
 }
 
-// Replace the legacy hard-coded image carousel with the single authoritative CMS image.
+// Replace the legacy hard-coded carousel with the single authoritative CMS image.
 const oldImageBlock = /  const (?:defaultHeroImages|heroImages) = \[[\s\S]*?\n  \];\n  useEffect\(\(\) => \{ const interval = setInterval\(\(\) => setCurrentImageIndex\(prev => \(prev \+ 1\) % heroImages\.length\), 4000\); return \(\) => clearInterval\(interval\); \}, \[[^\]]*\]\);/;
 if (oldImageBlock.test(heroText)) {
   heroText = heroText.replace(oldImageBlock, '  const heroImages = cmsHero.hero_image_url ? [cmsHero.hero_image_url] : [];');
@@ -139,14 +134,13 @@ const legacySubtitle = '<p className="text-xl text-gray-700 leading-relaxed font
 const cmsSubtitle = '<p className="text-xl text-gray-700 leading-relaxed font-medium">{cmsHero.hero_subtitle || CMS_DEFAULT_HERO.hero_subtitle}</p>';
 if (heroText.includes(legacySubtitle)) heroText = heroText.replace(legacySubtitle, cmsSubtitle);
 
-// Remove the old image element and carousel dots. Keep the current cached image visible
-// while a fresh CMS image is being fetched/preloaded; only show a skeleton on first visit.
+// Keep cached image visible while the fresh image is being fetched/preloaded.
 const oldImageStart = '<img src={heroImages[currentImageIndex]}';
 const oldImageEnd = '</div><div className="absolute -top-6 -right-6';
 const imageStartIndex = heroText.indexOf(oldImageStart);
 const imageEndIndex = imageStartIndex === -1 ? -1 : heroText.indexOf(oldImageEnd, imageStartIndex);
 if (imageStartIndex !== -1 && imageEndIndex !== -1) {
-  const cmsImageMarkup = '{cmsHeroLoading ? <div className="w-full h-full rounded-2xl bg-rose-50 animate-pulse" aria-label="Loading homepage image" /> : cmsHero.hero_image_url ? <img src={cmsHero.hero_image_url} alt="Memories homepage" className="w-full h-full object-cover rounded-2xl shadow-lg" /> : <div className="w-full h-full rounded-2xl bg-rose-50 flex items-center justify-center text-rose-300 font-medium">Memories</div>}';
+  const cmsImageMarkup = '{cmsHeroLoading ? <div className="w-full h-full rounded-2xl bg-rose-50 animate-pulse" aria-label="Loading homepage image" /> : cmsHero.hero_image_url ? <img src={cmsHero.hero_image_url} alt="Memories homepage" fetchPriority="high" decoding="async" className="w-full h-full object-cover rounded-2xl shadow-lg" /> : <div className="w-full h-full rounded-2xl bg-rose-50 flex items-center justify-center text-rose-300 font-medium">Memories</div>}';
   heroText = heroText.slice(0, imageStartIndex) + cmsImageMarkup + heroText.slice(imageEndIndex);
 }
 
@@ -158,12 +152,19 @@ if (!heroText.includes('CMS_HERO_CACHE_KEY')) throw new Error('CMS homepage hero
 if (!heroText.includes('preloadImage')) throw new Error('CMS homepage hero preload wiring verification failed');
 if (heroText.includes('images.unsplash.com/photo-1513519245088-0e12902e5a38')) throw new Error('Legacy hero image was not removed');
 
-// Remove the non-CMS promotional badges around the hero image. Discounts and delivery
-// offers should only appear when intentionally configured as a current promotion.
+// Remove stale hard-coded promotional badges around the hero image.
 const heroPromoBadges = '<div className="absolute -top-6 -right-6 w-20 h-20 bg-gradient-to-br from-yellow-400 to-orange-500 rounded-full flex items-center justify-center shadow-xl animate-bounce"><span className="text-white font-bold text-sm">25% OFF</span></div><div className="absolute -bottom-6 -left-6 w-24 h-24 bg-gradient-to-br from-green-400 to-emerald-500 rounded-full flex items-center justify-center shadow-xl animate-pulse"><div className="text-center"><div className="text-white font-bold text-xs">FREE</div><div className="text-white font-bold text-xs">DELIVERY</div></div></div>';
 if (heroText.includes(heroPromoBadges)) heroText = heroText.replace(heroPromoBadges, '');
 
 fs.writeFileSync(heroFile, heroText, 'utf8');
 
-// Do not rewrite App.js here. App.js is authoritative source and must remain valid JSX.
-console.log('CMS Admin, announcement banner and homepage hero wiring applied; cached CMS hero is shown immediately while the latest CMS media refreshes in the background.');
+// Delay the welcome popup until the homepage has had time to become visually stable.
+// This is a frontend-only change; no payment/auth/CMS backend logic is touched.
+const appFile = path.join(__dirname, '..', 'src', 'App.js');
+let appText = fs.readFileSync(appFile, 'utf8');
+const oldWelcomeTimer = 'setTimeout(() => setShowPopup(true), 2000)';
+const newWelcomeTimer = 'setTimeout(() => setShowPopup(true), 5000)';
+if (appText.includes(oldWelcomeTimer)) appText = appText.replace(oldWelcomeTimer, newWelcomeTimer);
+fs.writeFileSync(appFile, appText, 'utf8');
+
+console.log('Homepage performance wiring applied: cached CMS hero, high-priority image preload, and delayed welcome popup.');
