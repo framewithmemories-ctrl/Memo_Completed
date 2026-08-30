@@ -2,14 +2,14 @@ name: Apply wallet checkout integrity fix
 
 on:
   push:
-    branches: [main]
+    branches:
+      - main
 
 permissions:
   contents: write
 
 jobs:
   apply-fix:
-    if: "!contains(github.event.head_commit.message, 'wallet checkout integrity fix')"
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -19,6 +19,7 @@ jobs:
         shell: python
         run: |
           from pathlib import Path
+          import re
 
           backend = Path('backend/server.py')
           text = backend.read_text()
@@ -42,30 +43,8 @@ jobs:
               raise SystemExit('OrderCreate block not found')
           text = text.replace(old_model, new_model, 1)
 
-          old_block = '''    total = order.total_amount
-              if total is None or not math.isfinite(total) or total <= 0 or total > 5_000_000:
-                  raise HTTPException(status_code=400, detail="Invalid order total")
-              # Reject grossly manipulated totals (client legitimately adds tax/delivery or subtracts discounts)
-              if total < computed_subtotal * 0.4:
-                  raise HTTPException(status_code=400, detail="Order total does not match items")
-
-              # Points earned from validated subtotal (server-side), not client total
-              points_earned = int(computed_subtotal * 0.03)
-
-              order_dict = order.dict()
-              order_dict["points_earned"] = points_earned
-              order_obj = Order(**order_dict)
-              
-              await db.orders.insert_one(order_obj.dict())
-              
-              # Purchase points are awarded only after verified payment.
-              # Do not mutate the user's reward balance while an order is unpaid.
-
-              return order_obj'''
-          if old_block not in text:
-              raise SystemExit('create_order pricing block not found')
-
-          new_block = '''    # Server-authoritative totals: checkout display and stored order must use the same rules.
+          pattern = r'''    total = order\.total_amount\n.*?    return order_obj'''
+          replacement = '''    # Server-authoritative totals: checkout display and stored order must use the same rules.
               user = await db.users.find_one({"id": current["id"]})
               delivery = 0.0 if (order.delivery_type == "pickup" or computed_subtotal >= 1000) else 50.0
               tax = round(computed_subtotal * 0.18)
@@ -113,12 +92,14 @@ jobs:
                           description=f"Store credit for order #{order_obj.id[:8]}",
                           category="purchase",
                           order_id=order_obj.id,
-                          balance_after=float((user or {}).get("store_credits", 0.0) or 0.0) - store_credit_applied,
+                          balance_after=max(0.0, float((user or {}).get("store_credits", 0.0) or 0.0) - store_credit_applied),
                       ).dict()
                   )
 
               return order_obj'''
-          text = text.replace(old_block, new_block, 1)
+          text, count = re.subn(pattern, replacement, text, count=1, flags=re.S)
+          if count != 1:
+              raise SystemExit(f'create_order pricing block replacement count={count}')
           backend.write_text(text)
 
           frontend = Path('frontend/src/components/EnhancedCheckoutPage.js')
