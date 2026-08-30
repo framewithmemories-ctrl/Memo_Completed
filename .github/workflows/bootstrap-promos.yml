@@ -1,0 +1,173 @@
+name: Bootstrap Promo Engine
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/bootstrap-promos.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  bootstrap:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Patch promo engine
+        shell: python
+        run: |
+          from pathlib import Path
+          p = Path('backend/server.py')
+          s = p.read_text()
+          if 'promo_engine_v1' in s:
+              raise SystemExit('Promo engine already installed')
+
+          marker = 'class GiftQuizResponse(BaseModel):'
+          model = r'''
+# ============================ Promo Code Engine ============================
+# promo_engine_v1
+class PromoCodeCreate(BaseModel):
+    code: str
+    discount_type: str = "percentage"  # percentage | fixed
+    discount_value: float
+    min_order_value: float = 0.0
+    max_discount: Optional[float] = None
+    usage_limit: Optional[int] = None
+    per_user_limit: int = 1
+    starts_at: Optional[datetime] = None
+    expires_at: Optional[datetime] = None
+    active: bool = True
+
+class PromoCodeUpdate(PromoCodeCreate):
+    pass
+
+class PromoApplyRequest(BaseModel):
+    code: str
+    items: List[dict]
+    delivery_type: str = "delivery"
+    use_store_credit: bool = False
+
+
+def _normalize_promo_code(code: str) -> str:
+    return (code or '').strip().upper()
+
+async def _get_valid_promo(code: str, subtotal: float, user_id: Optional[str] = None):
+    normalized = _normalize_promo_code(code)
+    if not normalized:
+        return None, 0.0
+    promo = await db.promo_codes.find_one({"code": normalized})
+    if not promo or not promo.get("active", True):
+        raise HTTPException(status_code=400, detail="Invalid or inactive promo code")
+    now = datetime.now(timezone.utc)
+    def as_dt(v):
+        if isinstance(v, datetime): return v
+        if isinstance(v, str):
+            try: return datetime.fromisoformat(v.replace('Z', '+00:00'))
+            except Exception: return None
+        return None
+    starts = as_dt(promo.get("starts_at")); expires = as_dt(promo.get("expires_at"))
+    if starts and now < starts: raise HTTPException(status_code=400, detail="Promo code is not active yet")
+    if expires and now > expires: raise HTTPException(status_code=400, detail="Promo code has expired")
+    if subtotal < float(promo.get("min_order_value", 0) or 0):
+        raise HTTPException(status_code=400, detail=f"Minimum order value for this promo is ₹{float(promo.get('min_order_value', 0) or 0):.2f}")
+    usage = int(promo.get("usage_count", 0) or 0)
+    limit = promo.get("usage_limit")
+    if limit is not None and usage >= int(limit):
+        raise HTTPException(status_code=400, detail="Promo code usage limit reached")
+    if user_id and int(promo.get("per_user_limit", 1) or 1) > 0:
+        used = await db.promo_redemptions.count_documents({"promo_code": normalized, "user_id": user_id})
+        if used >= int(promo.get("per_user_limit", 1) or 1):
+            raise HTTPException(status_code=400, detail="You have already used this promo code the maximum number of times")
+    dtype = promo.get("discount_type", "percentage")
+    value = float(promo.get("discount_value", 0) or 0)
+    if dtype == "percentage":
+        if value <= 0 or value > 100: raise HTTPException(status_code=400, detail="Invalid promo percentage")
+        discount = subtotal * value / 100.0
+        max_discount = promo.get("max_discount")
+        if max_discount is not None: discount = min(discount, float(max_discount))
+    elif dtype == "fixed":
+        if value <= 0: raise HTTPException(status_code=400, detail="Invalid promo amount")
+        discount = value
+    else:
+        raise HTTPException(status_code=400, detail="Invalid promo discount type")
+    return promo, round(min(discount, subtotal), 2)
+
+@api_router.get("/admin/promos")
+async def admin_list_promos(admin=Depends(require_admin)):
+    promos = await db.promo_codes.find({}).sort("created_at", -1).to_list(500)
+    for p in promos: p.pop("_id", None)
+    return {"promos": promos}
+
+@api_router.post("/admin/promos")
+async def admin_create_promo(payload: PromoCodeCreate, admin=Depends(require_admin)):
+    code = _normalize_promo_code(payload.code)
+    if not code or not re.fullmatch(r"[A-Z0-9_-]{3,40}", code):
+        raise HTTPException(status_code=400, detail="Promo code must be 3-40 characters using letters, numbers, _ or -")
+    if payload.discount_value <= 0: raise HTTPException(status_code=400, detail="Discount must be greater than zero")
+    if payload.discount_type not in ("percentage", "fixed"): raise HTTPException(status_code=400, detail="Invalid discount type")
+    if payload.discount_type == "percentage" and payload.discount_value > 100: raise HTTPException(status_code=400, detail="Percentage cannot exceed 100")
+    if await db.promo_codes.find_one({"code": code}): raise HTTPException(status_code=409, detail="Promo code already exists")
+    doc = payload.dict(); doc.update({"code": code, "usage_count": 0, "created_at": datetime.now(timezone.utc), "updated_at": datetime.now(timezone.utc), "created_by": admin.get("sub")})
+    await db.promo_codes.insert_one(doc); doc.pop("_id", None)
+    return doc
+
+@api_router.put("/admin/promos/{code}")
+async def admin_update_promo(code: str, payload: PromoCodeUpdate, admin=Depends(require_admin)):
+    normalized = _normalize_promo_code(code)
+    existing = await db.promo_codes.find_one({"code": normalized})
+    if not existing: raise HTTPException(status_code=404, detail="Promo code not found")
+    if payload.discount_value <= 0: raise HTTPException(status_code=400, detail="Discount must be greater than zero")
+    if payload.discount_type not in ("percentage", "fixed"): raise HTTPException(status_code=400, detail="Invalid discount type")
+    if payload.discount_type == "percentage" and payload.discount_value > 100: raise HTTPException(status_code=400, detail="Percentage cannot exceed 100")
+    doc = payload.dict(); doc["code"] = normalized; doc["usage_count"] = existing.get("usage_count", 0); doc["updated_at"] = datetime.now(timezone.utc)
+    await db.promo_codes.replace_one({"code": normalized}, doc); doc.pop("_id", None)
+    return doc
+
+@api_router.delete("/admin/promos/{code}")
+async def admin_delete_promo(code: str, admin=Depends(require_admin)):
+    result = await db.promo_codes.update_one({"code": _normalize_promo_code(code)}, {"$set": {"active": False, "updated_at": datetime.now(timezone.utc)}})
+    if result.matched_count != 1: raise HTTPException(status_code=404, detail="Promo code not found")
+    return {"success": True}
+
+'''
+          if marker not in s: raise SystemExit('model marker not found')
+          s = s.replace(marker, model + '\n' + marker, 1)
+
+          s = s.replace('    use_store_credit: bool = False\n', '    use_store_credit: bool = False\n    promo_code: Optional[str] = None\n', 1)
+          s = s.replace('    store_credit_applied: float = 0.0\n', '    store_credit_applied: float = 0.0\n    promo_code: Optional[str] = None\n    promo_discount: float = 0.0\n', 1)
+          old_sig = 'async def _compute_order_pricing(items: list, delivery_type: str, use_store_credit: bool, user: Optional[dict]):'
+          new_sig = 'async def _compute_order_pricing(items: list, delivery_type: str, use_store_credit: bool, user: Optional[dict], promo_code: Optional[str] = None):'
+          s = s.replace(old_sig, new_sig, 1)
+          old_calc = '    delivery = 0.0 if (delivery_type == "pickup" or subtotal >= 1000) else 50.0\n    tax = round(subtotal * 0.18)\n'
+          new_calc = '''    promo = None
+    promo_discount = 0.0
+    if promo_code:
+        promo, promo_discount = await _get_valid_promo(promo_code, subtotal, user.get("id") if user else None)
+    discounted_subtotal = max(0.0, subtotal - promo_discount)
+    delivery = 0.0 if (delivery_type == "pickup" or discounted_subtotal >= 1000) else 50.0
+    tax = round(discounted_subtotal * 0.18)
+'''
+          if old_calc not in s: raise SystemExit('pricing calc marker not found')
+          s = s.replace(old_calc, new_calc, 1)
+          s = s.replace('float(user.get("store_credits", 0.0) or 0.0) - sc', 'float(user.get("store_credits", 0.0) or 0.0) - sc', 1)
+          s = s.replace('min(available, subtotal + delivery + tax)', 'min(available, discounted_subtotal + delivery + tax)', 1)
+          s = s.replace('final_amount = max(0.0, subtotal + delivery + tax - store_credit_applied)', 'final_amount = max(0.0, discounted_subtotal + delivery + tax - store_credit_applied)', 1)
+          s = s.replace('"subtotal": subtotal, "delivery": delivery, "tax": tax,\n        "store_credit_applied": round(store_credit_applied, 2),', '"subtotal": subtotal, "promo_code": promo.get("code") if promo else None, "promo_discount": round(promo_discount, 2), "delivery": delivery, "tax": tax,\n        "store_credit_applied": round(store_credit_applied, 2),', 1)
+          s = s.replace('"points_earned": int(subtotal * 0.03),', '"points_earned": int(discounted_subtotal * 0.03),', 1)
+          s = s.replace('_compute_order_pricing(payload.items, payload.delivery_type, payload.use_store_credit, user)', '_compute_order_pricing(payload.items, payload.delivery_type, payload.use_store_credit, user, payload.promo_code)', 1)
+          s = s.replace('        store_credit_applied=pricing["store_credit_applied"],\n', '        store_credit_applied=pricing["store_credit_applied"],\n        promo_code=pricing.get("promo_code"),\n        promo_discount=pricing.get("promo_discount", 0.0),\n', 1)
+
+          p.write_text(s)
+      - name: Commit promo engine
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add backend/server.py .github/workflows/bootstrap-promos.yml
+          git commit -m "feat: add secure promo code engine"
+          git push origin main
+          git rm .github/workflows/bootstrap-promos.yml || true
+          git commit -m "chore: remove promo bootstrap workflow" || true
+          git push origin main || true
