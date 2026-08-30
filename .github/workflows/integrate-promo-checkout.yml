@@ -1,0 +1,83 @@
+name: Integrate Promo Checkout
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  integrate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Integrate promo pricing
+        shell: python
+        run: |
+          from pathlib import Path
+
+          p = Path('backend/server.py')
+          text = p.read_text(encoding='utf-8')
+
+          if 'from promo_engine import PromoError, normalize_promo_code, validate_and_calculate_promo' not in text:
+              text = text.replace(
+                  'from PIL import Image\n',
+                  'from PIL import Image\nfrom promo_engine import PromoError, normalize_promo_code, validate_and_calculate_promo\n',
+                  1,
+              )
+
+          if 'promo_code: Optional[str] = None' not in text:
+              text = text.replace(
+                  '    use_store_credit: bool = False\n\n\n# Razorpay single-transaction ceiling',
+                  '    use_store_credit: bool = False\n    promo_code: Optional[str] = None\n\n\n# Razorpay single-transaction ceiling',
+                  1,
+              )
+
+          old_sig = 'async def _compute_order_pricing(items: list, delivery_type: str, use_store_credit: bool, user: Optional[dict]):'
+          new_sig = 'async def _compute_order_pricing(items: list, delivery_type: str, use_store_credit: bool, user: Optional[dict], promo_code: Optional[str] = None):'
+          text = text.replace(old_sig, new_sig, 1)
+
+          old_block = '''    delivery = 0.0 if (delivery_type == "pickup" or subtotal >= 1000) else 50.0\n    tax = round(subtotal * 0.18)\n    # Store credit applied server-side (never trusts a client amount); capped at pre-credit total\n    store_credit_applied = 0.0'''
+          new_block = '''    # Promotion is evaluated against the server-validated merchandise subtotal.\n    # The promo document is read from MongoDB here so the client cannot forge discount rules.\n    promo_discount = 0.0\n    applied_promo_code = None\n    if promo_code:\n        normalized_code = normalize_promo_code(promo_code)\n        promo = await db.promos.find_one({"code_normalized": normalized_code, "is_active": True})\n        if not promo:\n            # Backward-compatible lookup for promo documents created with only `code`.\n            promo = await db.promos.find_one({"code": normalized_code, "is_active": True})\n        if not promo:\n            raise HTTPException(status_code=400, detail="Invalid or inactive promo code")\n        usage_count = await db.promo_redemptions.count_documents({"promo_id": promo.get("id") or str(promo.get("_id"))})\n        customer_usage_count = 0\n        if user and user.get("id"):\n            customer_usage_count = await db.promo_redemptions.count_documents({\n                "promo_id": promo.get("id") or str(promo.get("_id")),\n                "user_id": user["id"],\n            })\n        try:\n            promo_result = validate_and_calculate_promo(\n                promo,\n                Decimal(str(round(subtotal, 2))),\n                customer_id=user.get("id") if user else None,\n                usage_count=usage_count,\n                customer_usage_count=customer_usage_count,\n            )\n        except PromoError as exc:\n            raise HTTPException(status_code=400, detail=str(exc))\n        promo_discount = float(promo_result.discount)\n        applied_promo_code = promo_result.code\n\n    discounted_subtotal = max(0.0, subtotal - promo_discount)\n    delivery = 0.0 if (delivery_type == "pickup" or discounted_subtotal >= 1000) else 50.0\n    tax = round(discounted_subtotal * 0.18)\n    # Store credit applied server-side (never trusts a client amount); capped at pre-credit total\n    store_credit_applied = 0.0'''
+          if old_block not in text:
+              raise SystemExit('Expected pricing block was not found; refusing to modify server.py')
+          text = text.replace(old_block, new_block, 1)
+
+          text = text.replace(
+              '    final_amount = max(0.0, subtotal + delivery + tax - store_credit_applied)\n    return {\n        "subtotal": subtotal, "delivery": delivery, "tax": tax,',
+              '    final_amount = max(0.0, discounted_subtotal + delivery + tax - store_credit_applied)\n    return {\n        "subtotal": subtotal, "promo_code": applied_promo_code, "promo_discount": round(promo_discount, 2),\n        "discounted_subtotal": round(discounted_subtotal, 2), "delivery": delivery, "tax": tax,',
+              1,
+          )
+
+          text = text.replace(
+              '"points_earned": int(subtotal * 0.03),',
+              '"points_earned": int(discounted_subtotal * 0.03),',
+              1,
+          )
+
+          text = text.replace(
+              'pricing = await _compute_order_pricing(payload.items, payload.delivery_type, payload.use_store_credit, user)',
+              'pricing = await _compute_order_pricing(payload.items, payload.delivery_type, payload.use_store_credit, user, payload.promo_code)',
+              1,
+          )
+
+          text = text.replace(
+              '        store_credit_applied=pricing["store_credit_applied"],\n        payment_status="pending",',
+              '        store_credit_applied=pricing["store_credit_applied"],\n        payment_status="pending",\n        promo_code=pricing.get("promo_code"),\n        promo_discount=pricing.get("promo_discount", 0.0),',
+              1,
+          )
+
+          p.write_text(text, encoding='utf-8')
+
+      - name: Validate Python syntax
+        run: python -m py_compile backend/server.py backend/promo_engine.py
+
+      - name: Commit integration
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add backend/server.py .github/workflows/integrate-promo-checkout.yml
+          git diff --cached --quiet && echo "No changes" || git commit -m "feat: integrate promo codes into checkout pricing"
+          git push
