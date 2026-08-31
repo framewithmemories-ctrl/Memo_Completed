@@ -23,23 +23,27 @@ jobs:
           from pathlib import Path
           import re
 
+          # This is intentionally a narrow, one-time migration of the existing
+          # checkout implementation. It does not touch rewards, payment gateway,
+          # product data, or existing orders.
           backend = Path('backend/server.py')
           b = backend.read_text()
 
-          # Add the explicit checkout intent to OrderCreate.
+          # 1) Normal/COD order requests must explicitly carry the checkout intent.
           if 'use_store_credit: bool = False' not in b:
               pattern = r'class OrderCreate\(BaseModel\):\n(.*?)(?=\nclass GiftQuizResponse\(BaseModel\):)'
               m = re.search(pattern, b, re.S)
               if not m:
                   raise SystemExit('OrderCreate model not found')
               block = m.group(0)
-              if 'pickup_slot: Optional[str] = None' not in block:
+              marker = '    pickup_slot: Optional[str] = None'
+              if marker not in block:
                   raise SystemExit('OrderCreate pickup_slot field not found')
-              block = block.replace('pickup_slot: Optional[str] = None', 'pickup_slot: Optional[str] = None\n    use_store_credit: bool = False', 1)
+              block = block.replace(marker, marker + '\n    use_store_credit: bool = False', 1)
               b = b[:m.start()] + block + b[m.end():]
 
-          # Replace only the legacy normal-order endpoint. The payment endpoint already
-          # uses the authoritative pricing engine and must remain unchanged.
+          # 2) Replace only the legacy /orders endpoint. Razorpay /payments/create-order
+          # already uses the server-authoritative pricing engine and remains unchanged.
           start_marker = '@api_router.post("/orders", response_model=Order)'
           end_marker = '\nclass PaymentVerifyRequest(BaseModel):'
           start = b.find(start_marker)
@@ -68,6 +72,9 @@ async def create_order(order: OrderCreate, current=Depends(get_current_user)):
     order_dict["points_earned"] = pricing["points_earned"]
     order_obj = Order(**order_dict)
 
+    # COD/pickup orders commit store credit at order creation, matching the
+    # existing wallet-pay behavior. Razorpay orders commit it only after payment
+    # verification in /payments/verify, so this path is not used for Razorpay.
     if pricing["store_credit_applied"] > 0:
         debit = await db.users.update_one(
             {"id": order.user_id, "store_credits": {"$gte": pricing["store_credit_applied"]}},
@@ -106,22 +113,27 @@ async def create_order(order: OrderCreate, current=Depends(get_current_user)):
           b = b[:start] + new_route + b[end:]
           backend.write_text(b)
 
+          # 3) Checkout UI must display and submit the same balance used by the backend.
           frontend = Path('frontend/src/components/EnhancedCheckoutPage.js')
           f = frontend.read_text()
 
-          f = f.replace(
-              "axios.get(`${API}/users/${user.id}/wallet`).then((r) => setUserWallet({ balance: r.data.balance || 0 })).catch(() => {});",
-              "axios.get(`${API}/users/${user.id}/wallet`).then((r) => setUserWallet({ balance: Number(r.data.store_credits || 0) })).catch(() => {});",
-              1,
-          )
+          old_wallet_load = "axios.get(`${API}/users/${user.id}/wallet`).then((r) => setUserWallet({ balance: r.data.balance || 0 })).catch(() => {});"
+          new_wallet_load = "axios.get(`${API}/users/${user.id}/wallet`).then((r) => setUserWallet({ balance: Number(r.data.store_credits || 0) })).catch(() => {});"
+          if old_wallet_load in f:
+              f = f.replace(old_wallet_load, new_wallet_load, 1)
+          elif new_wallet_load not in f:
+              raise SystemExit('Wallet balance loader not found')
 
-          if 'use_store_credit: !!(useWalletBalance && user),' not in f:
-              address_marker = '        delivery_address: address,'
-              pos = f.find(address_marker)
-              order_pos = f.find('const order = (await axios.post(`${API}/orders`, {')
-              if order_pos < 0 or pos < order_pos:
-                  raise SystemExit('Normal order payload not found')
-              f = f[:pos + len(address_marker)] + '\n        use_store_credit: !!(useWalletBalance && user),' + f[pos + len(address_marker):]
+          order_pos = f.find('const order = (await axios.post(`${API}/orders`, {')
+          if order_pos < 0:
+              raise SystemExit('Normal order payload not found')
+          address_marker = '        delivery_address: address,'
+          pos = f.find(address_marker, order_pos)
+          if pos < 0:
+              raise SystemExit('Normal order delivery address field not found')
+          flag = '        use_store_credit: !!(useWalletBalance && user),'
+          if flag not in f[pos:pos + 500]:
+              f = f[:pos + len(address_marker)] + '\n' + flag + f[pos + len(address_marker):]
 
           old_wallet_pay = '''      if (useWalletBalance && user && totals.walletDiscount > 0) {
         await axios.post(`${API}/users/${user.id}/wallet/pay`, null, {
@@ -138,13 +150,19 @@ async def create_order(order: OrderCreate, current=Depends(get_current_user)):
       finalizeOrder(order, serverTotals);'''
           if old_wallet_pay in f:
               f = f.replace(old_wallet_pay, new_wallet_pay, 1)
+          elif 'walletDiscount: Number(order.store_credit_applied || 0)' not in f:
+              raise SystemExit('Legacy wallet payment block not found')
 
-          # Razorpay/mock checkout: always display the server-computed pricing returned
-          # by /payments/create-order.
-          if 'const serverTotals = {' not in f[f.find('const handleRazorpay'):f.find('const handleSubmit', f.find('const handleRazorpay'))]:
+          # 4) Razorpay/mock checkout must use the pricing returned by the server.
+          checkout_start = f.find('const handleRazorpay')
+          submit_start = f.find('const handleSubmit', checkout_start)
+          if checkout_start < 0 or submit_start < 0:
+              raise SystemExit('Razorpay/submit boundaries not found')
+          razor_section = f[checkout_start:submit_start]
+          if 'const serverTotals = {' not in razor_section:
               anchor = "    if (info.mode !== 'production' || !info.key_id) {"
-              pos = f.find(anchor, f.find('const handleRazorpay'))
-              if pos < 0:
+              pos = f.find(anchor, checkout_start)
+              if pos < 0 or pos > submit_start:
                   raise SystemExit('Razorpay insertion point not found')
               pricing = '''    const serverTotals = {
       subtotal: Number(info.pricing?.subtotal || 0),
@@ -156,14 +174,15 @@ async def create_order(order: OrderCreate, current=Depends(get_current_user)):
 
 '''
               f = f[:pos] + pricing + f[pos:]
-
           f = f.replace('await verifyAndFinalize(info.memories_order_id, totals, {});', 'await verifyAndFinalize(info.memories_order_id, serverTotals, {});', 1)
           f = f.replace('handler: (response) => verifyAndFinalize(info.memories_order_id, totals, response),', 'handler: (response) => verifyAndFinalize(info.memories_order_id, serverTotals, response),', 1)
           frontend.write_text(f)
 
+          # Strong verification: fail before committing if the intended code is not present.
           checks = [
               ('OrderCreate use_store_credit', 'use_store_credit: bool = False', b),
-              ('normal order pricing', 'pricing = await _compute_order_pricing(', b),
+              ('normal order server pricing', 'pricing = await _compute_order_pricing(', b),
+              ('normal order authoritative total', 'order_dict["total_amount"] = pricing["final_amount"]', b),
               ('normal order stored credit', 'order_dict["store_credit_applied"] = pricing["store_credit_applied"]', b),
               ('frontend store credits', 'r.data.store_credits || 0', f),
               ('frontend order credit flag', 'use_store_credit: !!(useWalletBalance && user)', f),
