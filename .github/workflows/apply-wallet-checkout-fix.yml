@@ -21,7 +21,6 @@ jobs:
         shell: python
         run: |
           from pathlib import Path
-          import re
 
           backend = Path('backend/server.py')
           b = backend.read_text()
@@ -60,8 +59,6 @@ async def create_order(order: OrderCreate, current=Depends(get_current_user)):
     order_dict["points_earned"] = pricing["points_earned"]
     order_obj = Order(**order_dict)
 
-    # COD orders are considered placed at checkout, so the store-credit discount
-    # is committed now. Razorpay orders commit it during payment verification.
     if pricing["store_credit_applied"] > 0:
         debit = await db.users.update_one(
             {"id": order.user_id, "store_credits": {"$gte": pricing["store_credit_applied"]}},
@@ -103,19 +100,18 @@ async def create_order(order: OrderCreate, current=Depends(get_current_user)):
           frontend = Path('frontend/src/components/EnhancedCheckoutPage.js')
           f = frontend.read_text()
 
-          f = f.replace(
-              "axios.get(`${API}/users/${user.id}/wallet`).then((r) => setUserWallet({ balance: r.data.balance || 0 })).catch(() => {});",
-              "axios.get(`${API}/users/${user.id}/wallet`).then((r) => setUserWallet({ balance: Number(r.data.store_credits || 0) })).catch(() => {});",
-              1,
-          )
+          old_wallet_fetch = "axios.get(`${API}/users/${user.id}/wallet`).then((r) => setUserWallet({ balance: r.data.balance || 0 })).catch(() => {});"
+          new_wallet_fetch = "axios.get(`${API}/users/${user.id}/wallet`).then((r) => setUserWallet({ balance: Number(r.data.store_credits || 0) })).catch(() => {});"
+          f = f.replace(old_wallet_fetch, new_wallet_fetch, 1)
 
           if 'use_store_credit: !!(useWalletBalance && user),' not in f:
-              pattern = r'(const order = \(await axios\.post\(\`\$\{API\}/orders\`, \{.*?delivery_address: address,)(\n\s*\}\)\)\.data;)'
-              m = re.search(pattern, f, re.S)
-              if not m:
+              order_start = f.find('const order = (await axios.post(`${API}/orders`, {')
+              order_end = f.find('})).data;', order_start)
+              address_pos = f.find('delivery_address: address,', order_start)
+              if order_start < 0 or order_end < 0 or address_pos < 0 or address_pos > order_end:
                   raise SystemExit('Normal order payload not found')
-              replacement = m.group(1) + '\n        use_store_credit: !!(useWalletBalance && user),' + m.group(2)
-              f = f[:m.start()] + replacement + f[m.end():]
+              insert_at = address_pos + len('delivery_address: address,')
+              f = f[:insert_at] + '\n        use_store_credit: !!(useWalletBalance && user),' + f[insert_at:]
 
           old_wallet = '''      if (useWalletBalance && user && totals.walletDiscount > 0) {
         await axios.post(`${API}/users/${user.id}/wallet/pay`, null, {
@@ -153,16 +149,8 @@ async def create_order(order: OrderCreate, current=Depends(get_current_user)):
                   raise SystemExit('Razorpay pricing anchor not found')
               f = f[:pos] + insert + f[pos:]
 
-          f = f.replace(
-              'await verifyAndFinalize(info.memories_order_id, totals, {});',
-              'await verifyAndFinalize(info.memories_order_id, serverTotals, {});',
-              1,
-          )
-          f = f.replace(
-              'handler: (response) => verifyAndFinalize(info.memories_order_id, totals, response),',
-              'handler: (response) => verifyAndFinalize(info.memories_order_id, serverTotals, response),',
-              1,
-          )
+          f = f.replace('await verifyAndFinalize(info.memories_order_id, totals, {});', 'await verifyAndFinalize(info.memories_order_id, serverTotals, {});', 1)
+          f = f.replace('handler: (response) => verifyAndFinalize(info.memories_order_id, totals, response),', 'handler: (response) => verifyAndFinalize(info.memories_order_id, serverTotals, response),', 1)
           frontend.write_text(f)
 
           b = backend.read_text(); f = frontend.read_text()
