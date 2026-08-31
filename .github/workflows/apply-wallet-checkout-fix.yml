@@ -1,6 +1,9 @@
 name: Apply wallet checkout integrity fix
 
 on:
+  push:
+    branches:
+      - main
   workflow_dispatch:
 
 permissions:
@@ -17,12 +20,10 @@ jobs:
         shell: python
         run: |
           from pathlib import Path
-          import re
 
           backend = Path('backend/server.py')
           text = backend.read_text()
 
-          # 1) Let the normal /orders flow explicitly request store-credit use.
           if 'use_store_credit: bool = False' not in text:
               marker = '    pickup_slot: Optional[str] = None\n\nclass GiftQuizResponse'
               replacement = '    pickup_slot: Optional[str] = None\n    use_store_credit: bool = False\n\nclass GiftQuizResponse'
@@ -30,7 +31,6 @@ jobs:
                   raise SystemExit('OrderCreate insertion marker not found')
               text = text.replace(marker, replacement, 1)
 
-          # 2) Make /orders use the same server-authoritative pricing engine as payments/create-order.
           start = text.find('    total = order.total_amount', text.find('@api_router.post("/orders"'))
           end = text.find('\nclass PaymentVerifyRequest', start)
           if start < 0 or end < 0:
@@ -50,7 +50,6 @@ jobs:
     order_dict["points_earned"] = pricing["points_earned"]
     order_obj = Order(**order_dict)
 
-    # For the non-gateway order flow, store credit is committed atomically with the order.
     if pricing["store_credit_applied"] > 0:
         debit = await db.users.update_one(
             {"id": order.user_id, "store_credits": {"$gte": pricing["store_credit_applied"]}},
@@ -92,14 +91,12 @@ jobs:
           frontend = Path('frontend/src/components/EnhancedCheckoutPage.js')
           text = frontend.read_text()
 
-          # 3) The checkout wallet display must use the same spendable balance as the server.
           old = "axios.get(`${API}/users/${user.id}/wallet`).then((r) => setUserWallet({ balance: r.data.balance || 0 })).catch(() => {});"
           new = "axios.get(`${API}/users/${user.id}/wallet`).then((r) => setUserWallet({ balance: r.data.store_credits || 0 })).catch(() => {});"
           if old not in text:
               raise SystemExit('wallet fetch block not found')
           text = text.replace(old, new, 1)
 
-          # 4) Send the store-credit intent through the normal /orders flow too.
           old = '''        delivery_type: formData.deliveryType,
         delivery_address: address,
       })).data;'''
@@ -111,7 +108,6 @@ jobs:
               raise SystemExit('normal order payload block not found')
           text = text.replace(old, new, 1)
 
-          # 5) Remove the old best-effort wallet/pay call and use the server-stored totals.
           old = '''      if (useWalletBalance && user && totals.walletDiscount > 0) {
         await axios.post(`${API}/users/${user.id}/wallet/pay`, null, {
           params: { amount: totals.walletDiscount, order_id: order.id },
@@ -129,8 +125,6 @@ jobs:
               raise SystemExit('normal wallet-pay block not found')
           text = text.replace(old, new, 1)
 
-          # 6) Razorpay/mock checkout already receives authoritative pricing from the server.
-          # Use that pricing for the confirmation screen instead of the browser's independent calculation.
           anchor = '''    } catch (err) {
       toast.error(err.response?.data?.detail || 'Could not start payment. Please try again.');
       setIsSubmitting(false);
@@ -167,10 +161,8 @@ jobs:
               'handler: (response) => verifyAndFinalize(info.memories_order_id, serverTotals, response),',
               1,
           )
-
           frontend.write_text(text)
 
-          # Verify the important changes before committing.
           b = backend.read_text()
           f = frontend.read_text()
           required_backend = [
