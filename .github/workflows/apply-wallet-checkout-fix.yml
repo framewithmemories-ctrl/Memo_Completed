@@ -17,7 +17,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Apply exact wallet/store-credit fix
+      - name: Apply deterministic application fix
         shell: python
         run: |
           from pathlib import Path
@@ -25,26 +25,44 @@ jobs:
           backend = Path('backend/server.py')
           b = backend.read_text()
 
+          old_model = '''class OrderCreate(BaseModel):
+    user_id: str
+    items: List[dict]
+    total_amount: float
+    delivery_type: str
+    delivery_address: Optional[dict] = None
+    pickup_slot: Optional[str] = None
+'''
+          new_model = '''class OrderCreate(BaseModel):
+    user_id: str
+    items: List[dict]
+    total_amount: float
+    delivery_type: str
+    delivery_address: Optional[dict] = None
+    pickup_slot: Optional[str] = None
+    use_store_credit: bool = False
+'''
           if 'use_store_credit: bool = False' not in b:
-              marker = '    pickup_slot: Optional[str] = None\n\nclass GiftQuizResponse'
-              replacement = '    pickup_slot: Optional[str] = None\n    use_store_credit: bool = False\n\nclass GiftQuizResponse'
-              if marker not in b:
-                  raise SystemExit('OrderCreate marker not found')
-              b = b.replace(marker, replacement, 1)
+              if old_model not in b:
+                  raise SystemExit('OrderCreate exact block not found')
+              b = b.replace(old_model, new_model, 1)
 
           start_marker = '@api_router.post("/orders", response_model=Order)'
+          end_marker = '\nclass PaymentVerifyRequest(BaseModel):'
           start = b.find(start_marker)
-          end = b.find('\nclass PaymentVerifyRequest', start)
+          end = b.find(end_marker, start)
           if start < 0 or end < 0:
               raise SystemExit('create_order boundaries not found')
 
-          route = '''@api_router.post("/orders", response_model=Order)
+          new_route = '''@api_router.post("/orders", response_model=Order)
 async def create_order(order: OrderCreate, current=Depends(get_current_user)):
     if order.user_id != current["id"]:
         raise HTTPException(status_code=403, detail="Not authorized to create an order for another account")
     if not order.items:
         raise HTTPException(status_code=400, detail="Order must contain at least one item")
 
+    # Reuse the existing server-authoritative pricing/validation engine so COD and
+    # online checkout produce the same subtotal, tax, delivery and store-credit totals.
     user = await db.users.find_one({"id": order.user_id})
     pricing = await _compute_order_pricing(
         order.items,
@@ -59,6 +77,8 @@ async def create_order(order: OrderCreate, current=Depends(get_current_user)):
     order_dict["points_earned"] = pricing["points_earned"]
     order_obj = Order(**order_dict)
 
+    # COD orders are considered placed at checkout, so commit the store-credit
+    # deduction now. The payment flow commits it only after payment verification.
     if pricing["store_credit_applied"] > 0:
         debit = await db.users.update_one(
             {"id": order.user_id, "store_credits": {"$gte": pricing["store_credit_applied"]}},
@@ -94,7 +114,7 @@ async def create_order(order: OrderCreate, current=Depends(get_current_user)):
 
     return order_obj
 '''
-          b = b[:start] + route + b[end:]
+          b = b[:start] + new_route + b[end:]
           backend.write_text(b)
 
           frontend = Path('frontend/src/components/EnhancedCheckoutPage.js')
@@ -102,72 +122,72 @@ async def create_order(order: OrderCreate, current=Depends(get_current_user)):
 
           old_wallet_fetch = "axios.get(`${API}/users/${user.id}/wallet`).then((r) => setUserWallet({ balance: r.data.balance || 0 })).catch(() => {});"
           new_wallet_fetch = "axios.get(`${API}/users/${user.id}/wallet`).then((r) => setUserWallet({ balance: Number(r.data.store_credits || 0) })).catch(() => {});"
-          f = f.replace(old_wallet_fetch, new_wallet_fetch, 1)
+          if old_wallet_fetch in f:
+              f = f.replace(old_wallet_fetch, new_wallet_fetch, 1)
 
           if 'use_store_credit: !!(useWalletBalance && user),' not in f:
-              order_start = f.find('const order = (await axios.post(`${API}/orders`, {')
-              order_end = f.find('})).data;', order_start)
-              address_pos = f.find('delivery_address: address,', order_start)
-              if order_start < 0 or order_end < 0 or address_pos < 0 or address_pos > order_end:
-                  raise SystemExit('Normal order payload not found')
-              insert_at = address_pos + len('delivery_address: address,')
-              f = f[:insert_at] + '\n        use_store_credit: !!(useWalletBalance && user),' + f[insert_at:]
+              marker = '        delivery_address: address,\n      })).data;'
+              replacement = '        delivery_address: address,\n        use_store_credit: !!(useWalletBalance && user),\n      })).data;'
+              if marker not in f:
+                  raise SystemExit('Normal order payload exact block not found')
+              f = f.replace(marker, replacement, 1)
 
-          old_wallet = '''      if (useWalletBalance && user && totals.walletDiscount > 0) {
+          old_wallet_pay = '''      if (useWalletBalance && user && totals.walletDiscount > 0) {
         await axios.post(`${API}/users/${user.id}/wallet/pay`, null, {
           params: { amount: totals.walletDiscount, order_id: order.id },
         }).catch(() => {});
       }
 
       finalizeOrder(order, totals);'''
-          if old_wallet in f:
-              f = f.replace(old_wallet, '''      const serverTotals = {
+          new_wallet_pay = '''      const serverTotals = {
         ...totals,
         walletDiscount: Number(order.store_credit_applied || 0),
         final: Number(order.total_amount || totals.final),
       };
-      finalizeOrder(order, serverTotals);''', 1)
+      finalizeOrder(order, serverTotals);'''
+          if old_wallet_pay in f:
+              f = f.replace(old_wallet_pay, new_wallet_pay, 1)
 
-          razor_start = f.find('const handleRazorpay')
-          razor_end = f.find('const handleSubmit', razor_start)
-          if razor_start < 0 or razor_end < 0:
-              raise SystemExit('Razorpay function boundaries not found')
-          razor_section = f[razor_start:razor_end]
-          if 'const serverTotals = {' not in razor_section:
-              anchor = "    if (info.mode !== 'production' || !info.key_id) {"
-              insert = """    const serverTotals = {
-      subtotal: Number(info.pricing.subtotal || 0),
-      delivery: Number(info.pricing.delivery || 0),
-      tax: Number(info.pricing.tax || 0),
-      walletDiscount: Number(info.pricing.store_credit_applied || 0),
-      final: Number(info.pricing.final_amount || 0),
+          razor_anchor = "    if (info.mode !== 'production' || !info.key_id) {"
+          if 'const serverTotals = {' not in f[f.find('const handleRazorpay'):f.find('const handleSubmit', f.find('const handleRazorpay'))]:
+              pricing_insert = '''    const serverTotals = {
+      subtotal: Number(info.pricing?.subtotal || 0),
+      delivery: Number(info.pricing?.delivery || 0),
+      tax: Number(info.pricing?.tax || 0),
+      walletDiscount: Number(info.pricing?.store_credit_applied || 0),
+      final: Number(info.pricing?.final_amount || 0),
     };
 
-"""
-              pos = f.find(anchor, razor_start)
-              if pos < 0 or pos > razor_end:
+'''
+              pos = f.find(razor_anchor, f.find('const handleRazorpay'))
+              if pos < 0:
                   raise SystemExit('Razorpay pricing anchor not found')
-              f = f[:pos] + insert + f[pos:]
+              f = f[:pos] + pricing_insert + f[pos:]
 
           f = f.replace('await verifyAndFinalize(info.memories_order_id, totals, {});', 'await verifyAndFinalize(info.memories_order_id, serverTotals, {});', 1)
           f = f.replace('handler: (response) => verifyAndFinalize(info.memories_order_id, totals, response),', 'handler: (response) => verifyAndFinalize(info.memories_order_id, serverTotals, response),', 1)
           frontend.write_text(f)
 
-          b = backend.read_text(); f = frontend.read_text()
-          required = [
-              ('backend', 'use_store_credit: bool = False', b),
-              ('backend', 'pricing = await _compute_order_pricing(', b),
-              ('backend', 'order_dict["store_credit_applied"] = pricing["store_credit_applied"]', b),
-              ('frontend', 'r.data.store_credits || 0', f),
-              ('frontend', 'use_store_credit: !!(useWalletBalance && user)', f),
-              ('frontend', 'walletDiscount: Number(order.store_credit_applied || 0)', f),
-              ('frontend', 'info.pricing.final_amount', f),
+          # Fail before commit if any required change is missing.
+          checks = [
+              ('backend model', 'use_store_credit: bool = False', b),
+              ('backend pricing', 'pricing = await _compute_order_pricing(', b),
+              ('backend stored credit', 'order_dict["store_credit_applied"] = pricing["store_credit_applied"]', b),
+              ('frontend store credits', 'r.data.store_credits || 0', f),
+              ('frontend order flag', 'use_store_credit: !!(useWalletBalance && user)', f),
+              ('frontend authoritative total', 'walletDiscount: Number(order.store_credit_applied || 0)', f),
+              ('frontend payment pricing', 'info.pricing?.final_amount', f),
           ]
-          missing = [name + ': ' + needle for name, needle, hay in required if needle not in hay]
+          missing = [label for label, needle, hay in checks if needle not in hay]
           if missing:
-              raise SystemExit('Verification failed: ' + '; '.join(missing))
+              raise SystemExit('Verification failed: ' + ', '.join(missing))
 
-      - name: Commit application fix and remove patch workflow
+          print('Wallet checkout integrity application changes verified.')
+
+      - name: Validate Python syntax
+        run: python -m py_compile backend/server.py
+
+      - name: Commit application fix and remove temporary workflow
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
