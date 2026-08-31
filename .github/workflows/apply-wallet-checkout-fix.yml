@@ -1,13 +1,16 @@
 name: Apply wallet checkout integrity fix
 
 on:
-  workflow_dispatch:
+  push:
+    branches:
+      - main
 
 permissions:
   contents: write
 
 jobs:
   apply-fix:
+    if: github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -22,11 +25,15 @@ jobs:
           b = backend.read_text()
 
           # Add the checkout intent to normal orders. This is backward compatible.
-          if 'use_store_credit: bool = False' not in b[b.find('class OrderCreate'):b.find('class GiftQuizResponse')]:
-              marker = '    pickup_slot: Optional[str] = None\n\nclass GiftQuizResponse'
-              if marker not in b:
+          model_start = b.find('class OrderCreate')
+          model_end = b.find('class GiftQuizResponse', model_start)
+          model = b[model_start:model_end]
+          if 'use_store_credit: bool = False' not in model:
+              marker = '    pickup_slot: Optional[str] = None'
+              if marker not in model:
                   raise SystemExit('OrderCreate marker not found')
-              b = b.replace(marker, '    pickup_slot: Optional[str] = None\n    use_store_credit: bool = False\n\nclass GiftQuizResponse', 1)
+              model = model.replace(marker, marker + '\n    use_store_credit: bool = False', 1)
+              b = b[:model_start] + model + b[model_end:]
 
           # Keep the existing server-side item validation. After it has validated
           # catalog prices, calculate the authoritative checkout total using the
@@ -39,7 +46,7 @@ jobs:
 
           if 'server_final_amount' not in route:
               old = '''    total = order.total_amount\n    if total is None or not math.isfinite(total) or total <= 0 or total > 5_000_000:\n        raise HTTPException(status_code=400, detail="Invalid order total")\n    # Reject grossly manipulated totals (client legitimately adds tax/delivery or subtracts discounts)\n    if total < computed_subtotal * 0.4:\n        raise HTTPException(status_code=400, detail="Order total does not match items")\n\n    # Points earned from validated subtotal (server-side), not client total\n    points_earned = int(computed_subtotal * 0.03)\n\n    order_dict = order.dict()\n    order_dict["points_earned"] = points_earned\n    order_obj = Order(**order_dict)\n    \n    await db.orders.insert_one(order_obj.dict())\n'''
-              new = '''    # Authoritative total: subtotal + delivery + GST - server-held store credit.\n    # Never trust the wallet amount or final total supplied by the browser.\n    delivery_amount = 0.0 if (order.delivery_type == "pickup" or computed_subtotal >= 1000) else 50.0\n    tax_amount = round(computed_subtotal * 0.18)\n    user = await db.users.find_one({"id": order.user_id})\n    available_credit = float((user or {}).get("store_credits", 0.0) or 0.0)\n    store_credit_applied = 0.0\n    if order.use_store_credit:\n        store_credit_applied = max(0.0, min(available_credit, computed_subtotal + delivery_amount + tax_amount))\n    server_final_amount = round(max(0.0, computed_subtotal + delivery_amount + tax_amount - store_credit_applied), 2)\n\n    # Reject a materially manipulated client total, while allowing the legitimate\n    # server-calculated Store Credit total (including a zero final amount).\n    client_total = float(order.total_amount or 0)\n    if not math.isfinite(client_total) or client_total < 0 or client_total > 5_000_000:\n        raise HTTPException(status_code=400, detail="Invalid order total")\n    if abs(client_total - server_final_amount) > 0.01:\n        raise HTTPException(status_code=400, detail="Order total does not match server pricing")\n\n    points_earned = int(computed_subtotal * 0.03)\n    order_dict = order.dict()\n    order_dict["total_amount"] = server_final_amount\n    order_dict["store_credit_applied"] = round(store_credit_applied, 2)\n    order_dict["points_earned"] = points_earned\n    order_obj = Order(**order_dict)\n\n    # Store credit is committed atomically with order creation. If the order insert\n    # fails, the credit is restored. Razorpay orders use the separate payment flow\n    # and deduct credit only after payment verification.\n    if store_credit_applied > 0:\n        debit = await db.users.update_one(\n            {"id": order.user_id, "store_credits": {"$gte": store_credit_applied}},\n            {"$inc": {"store_credits": -store_credit_applied}},\n        )\n        if debit.matched_count != 1:\n            raise HTTPException(status_code=409, detail="Store credit changed. Please refresh and try again.")\n\n    try:\n        await db.orders.insert_one(order_obj.dict())\n    except Exception:\n        if store_credit_applied > 0:\n            await db.users.update_one(\n                {"id": order.user_id},\n                {"$inc": {"store_credits": store_credit_applied}},\n            )\n        raise\n\n    if store_credit_applied > 0:\n        updated_user = await db.users.find_one({"id": order.user_id})\n        balance_after = float((updated_user or {}).get("store_credits", 0.0) or 0.0)\n        await db.wallet_transactions.insert_one(\n            WalletTransaction(\n                user_id=order.user_id,\n                type="debit",\n                amount=store_credit_applied,\n                description=f"Store credit for order #{order_obj.id[:8]}",\n                category="purchase",\n                order_id=order_obj.id,\n                balance_after=balance_after,\n            ).dict()\n        )\n'''
+              new = '''    # Authoritative total: subtotal + delivery + GST - server-held store credit.\n    # Never trust the wallet amount or final total supplied by the browser.\n    delivery_amount = 0.0 if (order.delivery_type == "pickup" or computed_subtotal >= 1000) else 50.0\n    tax_amount = round(computed_subtotal * 0.18)\n    user = await db.users.find_one({"id": order.user_id})\n    available_credit = float((user or {}).get("store_credits", 0.0) or 0.0)\n    store_credit_applied = 0.0\n    if order.use_store_credit:\n        store_credit_applied = max(0.0, min(available_credit, computed_subtotal + delivery_amount + tax_amount))\n    server_final_amount = round(max(0.0, computed_subtotal + delivery_amount + tax_amount - store_credit_applied), 2)\n\n    client_total = float(order.total_amount or 0)\n    if not math.isfinite(client_total) or client_total < 0 or client_total > 5_000_000:\n        raise HTTPException(status_code=400, detail="Invalid order total")\n    if abs(client_total - server_final_amount) > 0.01:\n        raise HTTPException(status_code=400, detail="Order total does not match server pricing")\n\n    points_earned = int(computed_subtotal * 0.03)\n    order_dict = order.dict()\n    order_dict["total_amount"] = server_final_amount\n    order_dict["store_credit_applied"] = round(store_credit_applied, 2)\n    order_dict["points_earned"] = points_earned\n    order_obj = Order(**order_dict)\n\n    # Store credit is committed atomically with order creation. If the order insert\n    # fails, the credit is restored. Razorpay orders use the separate payment flow\n    # and deduct credit only after payment verification.\n    if store_credit_applied > 0:\n        debit = await db.users.update_one(\n            {"id": order.user_id, "store_credits": {"$gte": store_credit_applied}},\n            {"$inc": {"store_credits": -store_credit_applied}},\n        )\n        if debit.matched_count != 1:\n            raise HTTPException(status_code=409, detail="Store credit changed. Please refresh and try again.")\n\n    try:\n        await db.orders.insert_one(order_obj.dict())\n    except Exception:\n        if store_credit_applied > 0:\n            await db.users.update_one(\n                {"id": order.user_id},\n                {"$inc": {"store_credits": store_credit_applied}},\n            )\n        raise\n\n    if store_credit_applied > 0:\n        updated_user = await db.users.find_one({"id": order.user_id})\n        balance_after = float((updated_user or {}).get("store_credits", 0.0) or 0.0)\n        await db.wallet_transactions.insert_one(\n            WalletTransaction(\n                user_id=order.user_id,\n                type="debit",\n                amount=store_credit_applied,\n                description=f"Store credit for order #{order_obj.id[:8]}",\n                category="purchase",\n                order_id=order_obj.id,\n                balance_after=balance_after,\n            ).dict()\n        )\n'''
               if old not in route:
                   raise SystemExit('Expected normal order pricing block not found')
               route = route.replace(old, new, 1)
@@ -47,8 +54,6 @@ jobs:
 
           backend.write_text(b)
 
-          # Frontend: read the canonical store_credits field, tell the backend that
-          # wallet credit is requested, and display the server-stored final total.
           frontend = Path('frontend/src/components/EnhancedCheckoutPage.js')
           f = frontend.read_text()
 
@@ -75,7 +80,6 @@ jobs:
 
           frontend.write_text(f)
 
-          # Verify the intended application changes before committing.
           checks = [
               ('backend OrderCreate flag', 'use_store_credit: bool = False', b),
               ('backend server total', 'server_final_amount = round(', b),
@@ -88,7 +92,6 @@ jobs:
           missing = [name for name, needle, hay in checks if needle not in hay]
           if missing:
               raise SystemExit('Verification failed: ' + ', '.join(missing))
-
           print('Wallet checkout fix applied and verified.')
 
       - name: Validate backend syntax
