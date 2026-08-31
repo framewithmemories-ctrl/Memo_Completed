@@ -1,9 +1,6 @@
 name: Apply wallet checkout integrity fix
 
 on:
-  push:
-    branches:
-      - main
   workflow_dispatch:
 
 permissions:
@@ -16,145 +13,187 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Apply safe wallet/store-credit alignment
+      - name: Apply wallet and store-credit alignment
         shell: python
         run: |
           from pathlib import Path
-          from textwrap import dedent
           import re
 
           backend = Path('backend/server.py')
           text = backend.read_text()
 
-          old_model = dedent('''
-          class OrderCreate(BaseModel):
-              user_id: str
-              items: List[dict]
-              total_amount: float
-              delivery_type: str
-              delivery_address: Optional[dict] = None
-              pickup_slot: Optional[str] = None''').strip()
-          new_model = dedent('''
-          class OrderCreate(BaseModel):
-              user_id: str
-              items: List[dict]
-              total_amount: float
-              delivery_type: str
-              delivery_address: Optional[dict] = None
-              pickup_slot: Optional[str] = None
-              use_store_credit: bool = False''').strip()
-          if old_model not in text:
-              raise SystemExit('OrderCreate block not found')
-          text = text.replace(old_model, new_model, 1)
+          # 1) Let the normal /orders flow explicitly request store-credit use.
+          if 'use_store_credit: bool = False' not in text:
+              marker = '    pickup_slot: Optional[str] = None\n\nclass GiftQuizResponse'
+              replacement = '    pickup_slot: Optional[str] = None\n    use_store_credit: bool = False\n\nclass GiftQuizResponse'
+              if marker not in text:
+                  raise SystemExit('OrderCreate insertion marker not found')
+              text = text.replace(marker, replacement, 1)
 
-          pattern = r'''    total = order\.total_amount\n.*?    return order_obj'''
-          replacement = dedent('''
-              # Server-authoritative totals: checkout display and stored order must use the same rules.
-              user = await db.users.find_one({"id": current["id"]})
-              delivery = 0.0 if (order.delivery_type == "pickup" or computed_subtotal >= 1000) else 50.0
-              tax = round(computed_subtotal * 0.18)
-              store_credit_applied = 0.0
-              if order.use_store_credit and user:
-                  available = float(user.get("store_credits", 0.0) or 0.0)
-                  store_credit_applied = max(0.0, min(available, computed_subtotal + delivery + tax))
-              final_amount = max(0.0, computed_subtotal + delivery + tax - store_credit_applied)
+          # 2) Make /orders use the same server-authoritative pricing engine as payments/create-order.
+          start = text.find('    total = order.total_amount', text.find('@api_router.post("/orders"'))
+          end = text.find('\nclass PaymentVerifyRequest', start)
+          if start < 0 or end < 0:
+              raise SystemExit('create_order pricing block boundaries not found')
 
-              # Points are earned from validated subtotal, not the client-supplied total.
-              points_earned = int(computed_subtotal * 0.03)
+          new_block = '''    user = await db.users.find_one({"id": order.user_id})
+    pricing = await _compute_order_pricing(
+        order.items,
+        order.delivery_type,
+        order.use_store_credit,
+        user,
+    )
 
-              order_dict = order.dict()
-              order_dict["total_amount"] = round(final_amount, 2)
-              order_dict["store_credit_applied"] = round(store_credit_applied, 2)
-              order_dict["points_earned"] = points_earned
-              order_obj = Order(**order_dict)
+    order_dict = order.dict()
+    order_dict["total_amount"] = pricing["final_amount"]
+    order_dict["store_credit_applied"] = pricing["store_credit_applied"]
+    order_dict["points_earned"] = pricing["points_earned"]
+    order_obj = Order(**order_dict)
 
-              # Commit store credit only when this order actually uses it. The conditional
-              # update prevents two concurrent checkouts from spending the same credit.
-              if store_credit_applied > 0 and order.user_id:
-                  debit = await db.users.update_one(
-                      {"id": order.user_id, "store_credits": {"$gte": store_credit_applied}},
-                      {"$inc": {"store_credits": -store_credit_applied}},
-                  )
-                  if debit.matched_count != 1:
-                      raise HTTPException(status_code=409, detail="Store credit changed. Please refresh and try again.")
+    # For the non-gateway order flow, store credit is committed atomically with the order.
+    if pricing["store_credit_applied"] > 0:
+        debit = await db.users.update_one(
+            {"id": order.user_id, "store_credits": {"$gte": pricing["store_credit_applied"]}},
+            {"$inc": {"store_credits": -pricing["store_credit_applied"]}},
+        )
+        if debit.matched_count != 1:
+            raise HTTPException(status_code=409, detail="Store credit changed. Please refresh and try again.")
 
-              try:
-                  await db.orders.insert_one(order_obj.dict())
-              except Exception:
-                  if store_credit_applied > 0 and order.user_id:
-                      await db.users.update_one(
-                          {"id": order.user_id},
-                          {"$inc": {"store_credits": store_credit_applied}},
-                      )
-                  raise
+    try:
+        await db.orders.insert_one(order_obj.dict())
+    except Exception:
+        if pricing["store_credit_applied"] > 0:
+            await db.users.update_one(
+                {"id": order.user_id},
+                {"$inc": {"store_credits": pricing["store_credit_applied"]}},
+            )
+        raise
 
-              if store_credit_applied > 0 and order.user_id:
-                  await db.wallet_transactions.insert_one(
-                      WalletTransaction(
-                          user_id=order.user_id,
-                          type="debit",
-                          amount=store_credit_applied,
-                          description=f"Store credit for order #{order_obj.id[:8]}",
-                          category="purchase",
-                          order_id=order_obj.id,
-                          balance_after=max(0.0, float((user or {}).get("store_credits", 0.0) or 0.0) - store_credit_applied),
-                      ).dict()
-                  )
+    if pricing["store_credit_applied"] > 0:
+        updated_user = await db.users.find_one({"id": order.user_id})
+        balance_after = float((updated_user or {}).get("store_credits", 0.0) or 0.0)
+        await db.wallet_transactions.insert_one(
+            WalletTransaction(
+                user_id=order.user_id,
+                type="debit",
+                amount=pricing["store_credit_applied"],
+                description=f"Store credit for order #{order_obj.id[:8]}",
+                category="purchase",
+                order_id=order_obj.id,
+                balance_after=balance_after,
+            ).dict()
+        )
 
-              return order_obj''').lstrip('\n')
-          text, count = re.subn(pattern, replacement, text, count=1, flags=re.S)
-          if count != 1:
-              raise SystemExit(f'create_order pricing block replacement count={count}')
+    return order_obj
+'''
+          text = text[:start] + new_block + text[end:]
           backend.write_text(text)
 
           frontend = Path('frontend/src/components/EnhancedCheckoutPage.js')
           text = frontend.read_text()
 
-          old_wallet = "axios.get(`${API}/users/${user.id}/wallet`).then((r) => setUserWallet({ balance: r.data.balance || 0 })).catch(() => {});"
-          new_wallet = "axios.get(`${API}/users/${user.id}/wallet`).then((r) => setUserWallet({ balance: r.data.store_credits || 0 })).catch(() => {});"
-          if old_wallet not in text:
-              raise SystemExit('frontend wallet fetch not found')
-          text = text.replace(old_wallet, new_wallet, 1)
+          # 3) The checkout wallet display must use the same spendable balance as the server.
+          old = "axios.get(`${API}/users/${user.id}/wallet`).then((r) => setUserWallet({ balance: r.data.balance || 0 })).catch(() => {});"
+          new = "axios.get(`${API}/users/${user.id}/wallet`).then((r) => setUserWallet({ balance: r.data.store_credits || 0 })).catch(() => {});"
+          if old not in text:
+              raise SystemExit('wallet fetch block not found')
+          text = text.replace(old, new, 1)
 
-          old_order_payload = dedent('''
-                  delivery_type: formData.deliveryType,
-                  delivery_address: address,
-                })).data;''').strip()
-          new_order_payload = dedent('''
-                  delivery_type: formData.deliveryType,
-                  delivery_address: address,
-                  use_store_credit: !!(useWalletBalance && user),
-                })).data;''').strip()
-          if old_order_payload not in text:
-              raise SystemExit('frontend order payload block not found')
-          text = text.replace(old_order_payload, new_order_payload, 1)
+          # 4) Send the store-credit intent through the normal /orders flow too.
+          old = '''        delivery_type: formData.deliveryType,
+        delivery_address: address,
+      })).data;'''
+          new = '''        delivery_type: formData.deliveryType,
+        delivery_address: address,
+        use_store_credit: !!(useWalletBalance && user),
+      })).data;'''
+          if old not in text:
+              raise SystemExit('normal order payload block not found')
+          text = text.replace(old, new, 1)
 
-          old_wallet_pay = dedent('''
-                if (useWalletBalance && user && totals.walletDiscount > 0) {
-                  await axios.post(`${API}/users/${user.id}/wallet/pay`, null, {
-                    params: { amount: totals.walletDiscount, order_id: order.id },
-                  }).catch(() => {});
-                }
+          # 5) Remove the old best-effort wallet/pay call and use the server-stored totals.
+          old = '''      if (useWalletBalance && user && totals.walletDiscount > 0) {
+        await axios.post(`${API}/users/${user.id}/wallet/pay`, null, {
+          params: { amount: totals.walletDiscount, order_id: order.id },
+        }).catch(() => {});
+      }
 
-                finalizeOrder(order, totals);''').strip()
-          new_wallet_pay = dedent('''
-                const serverTotals = {
-                  ...totals,
-                  walletDiscount: Number(order.store_credit_applied || 0),
-                  final: Number(order.total_amount || totals.final),
-                };
-                finalizeOrder(order, serverTotals);''').strip()
-          if old_wallet_pay not in text:
-              raise SystemExit('frontend wallet-pay block not found')
-          text = text.replace(old_wallet_pay, new_wallet_pay, 1)
+      finalizeOrder(order, totals);'''
+          new = '''      const serverTotals = {
+        ...totals,
+        walletDiscount: Number(order.store_credit_applied || 0),
+        final: Number(order.total_amount || totals.final),
+      };
+      finalizeOrder(order, serverTotals);'''
+          if old not in text:
+              raise SystemExit('normal wallet-pay block not found')
+          text = text.replace(old, new, 1)
+
+          # 6) Razorpay/mock checkout already receives authoritative pricing from the server.
+          # Use that pricing for the confirmation screen instead of the browser's independent calculation.
+          anchor = '''    } catch (err) {
+      toast.error(err.response?.data?.detail || 'Could not start payment. Please try again.');
+      setIsSubmitting(false);
+      return;
+    }
+
+    if (info.mode !== 'production' || !info.key_id) {'''
+          replacement = '''    } catch (err) {
+      toast.error(err.response?.data?.detail || 'Could not start payment. Please try again.');
+      setIsSubmitting(false);
+      return;
+    }
+
+    const serverTotals = {
+      subtotal: Number(info.pricing.subtotal || 0),
+      delivery: Number(info.pricing.delivery || 0),
+      tax: Number(info.pricing.tax || 0),
+      walletDiscount: Number(info.pricing.store_credit_applied || 0),
+      final: Number(info.pricing.final_amount || 0),
+    };
+
+    if (info.mode !== 'production' || !info.key_id) {'''
+          if anchor not in text:
+              raise SystemExit('Razorpay pricing anchor not found')
+          text = text.replace(anchor, replacement, 1)
+
+          text = text.replace(
+              'await verifyAndFinalize(info.memories_order_id, totals, {});',
+              'await verifyAndFinalize(info.memories_order_id, serverTotals, {});',
+              1,
+          )
+          text = text.replace(
+              'handler: (response) => verifyAndFinalize(info.memories_order_id, totals, response),',
+              'handler: (response) => verifyAndFinalize(info.memories_order_id, serverTotals, response),',
+              1,
+          )
+
           frontend.write_text(text)
 
-          Path('.github/workflows/apply-wallet-checkout-fix.yml').unlink()
+          # Verify the important changes before committing.
+          b = backend.read_text()
+          f = frontend.read_text()
+          required_backend = [
+              'use_store_credit: bool = False',
+              'pricing = await _compute_order_pricing(',
+              'order_dict["store_credit_applied"] = pricing["store_credit_applied"]',
+          ]
+          required_frontend = [
+              'r.data.store_credits || 0',
+              'use_store_credit: !!(useWalletBalance && user)',
+              'walletDiscount: Number(order.store_credit_applied || 0)',
+              'const serverTotals = {',
+              'info.pricing.final_amount',
+          ]
+          missing = [x for x in required_backend if x not in b] + [x for x in required_frontend if x not in f]
+          if missing:
+              raise SystemExit('Patch verification failed: ' + ', '.join(missing))
 
       - name: Commit fix and remove temporary workflow
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add backend/server.py frontend/src/components/EnhancedCheckoutPage.js .github/workflows/apply-wallet-checkout-fix.yml
+          git add backend/server.py frontend/src/components/EnhancedCheckoutPage.js
+          git rm .github/workflows/apply-wallet-checkout-fix.yml
           git commit -m "fix: align wallet checkout totals with store credits"
           git push
