@@ -39,7 +39,7 @@ export const EnhancedCheckoutPage = ({ onClose }) => {
     if (!user) return;
     setUserProfile(user);
     setFormData((p) => ({ ...p, name: user.name || '', email: user.email || '', phone: user.phone || '', address: user.address || p.address }));
-    axios.get(`${API}/users/${user.id}/wallet`).then((r) => setUserWallet({ balance: r.data.balance || 0 })).catch(() => {});
+    axios.get(`${API}/users/${user.id}/wallet`).then((r) => setUserWallet({ balance: Number(r.data.store_credits || 0) })).catch(() => {});
   }, [user]);
 
   const subtotal = () => cartItems.reduce((sum, item) => sum + item.price * item.quantity, 0);
@@ -170,15 +170,15 @@ export const EnhancedCheckoutPage = ({ onClose }) => {
         total_amount: totals.final,
         delivery_type: formData.deliveryType,
         delivery_address: address,
+        use_store_credit: !!(useWalletBalance && user),
       })).data;
 
-      if (useWalletBalance && user && totals.walletDiscount > 0) {
-        await axios.post(`${API}/users/${user.id}/wallet/pay`, null, {
-          params: { amount: totals.walletDiscount, order_id: order.id },
-        }).catch(() => {});
-      }
-
-      finalizeOrder(order, totals);
+      const serverTotals = {
+        ...totals,
+        walletDiscount: Number(order.store_credit_applied || 0),
+        final: Number(order.total_amount || 0),
+      };
+      finalizeOrder(order, serverTotals);
     } catch (err) {
       toast.error(err.response?.data?.detail || 'Failed to place order. Please try again.');
     } finally {

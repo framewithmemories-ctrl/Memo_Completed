@@ -422,6 +422,7 @@ class OrderCreate(BaseModel):
     delivery_type: str
     delivery_address: Optional[dict] = None
     pickup_slot: Optional[str] = None
+    use_store_credit: bool = False
 
 class GiftQuizResponse(BaseModel):
     recipient: str
@@ -1075,21 +1076,65 @@ async def create_order(order: OrderCreate, current=Depends(get_current_user)):
         item["price"] = expected_price
         computed_subtotal += expected_price * qty
 
-    total = order.total_amount
-    if total is None or not math.isfinite(total) or total <= 0 or total > 5_000_000:
+    # Authoritative total: subtotal + delivery + GST - server-held store credit.
+    # Never trust the wallet amount or final total supplied by the browser.
+    delivery_amount = 0.0 if (order.delivery_type == "pickup" or computed_subtotal >= 1000) else 50.0
+    tax_amount = round(computed_subtotal * 0.18)
+    user = await db.users.find_one({"id": order.user_id})
+    available_credit = float((user or {}).get("store_credits", 0.0) or 0.0)
+    store_credit_applied = 0.0
+    if order.use_store_credit:
+        store_credit_applied = max(0.0, min(available_credit, computed_subtotal + delivery_amount + tax_amount))
+    server_final_amount = round(max(0.0, computed_subtotal + delivery_amount + tax_amount - store_credit_applied), 2)
+
+    client_total = float(order.total_amount or 0)
+    if not math.isfinite(client_total) or client_total < 0 or client_total > 5_000_000:
         raise HTTPException(status_code=400, detail="Invalid order total")
-    # Reject grossly manipulated totals (client legitimately adds tax/delivery or subtracts discounts)
-    if total < computed_subtotal * 0.4:
-        raise HTTPException(status_code=400, detail="Order total does not match items")
+    if abs(client_total - server_final_amount) > 0.01:
+        raise HTTPException(status_code=400, detail="Order total does not match server pricing")
 
-    # Points earned from validated subtotal (server-side), not client total
     points_earned = int(computed_subtotal * 0.03)
-
     order_dict = order.dict()
+    order_dict["total_amount"] = server_final_amount
+    order_dict["store_credit_applied"] = round(store_credit_applied, 2)
     order_dict["points_earned"] = points_earned
     order_obj = Order(**order_dict)
-    
-    await db.orders.insert_one(order_obj.dict())
+
+    # Store credit is committed atomically with order creation. If the order insert
+    # fails, the credit is restored. Razorpay orders use the separate payment flow
+    # and deduct credit only after payment verification.
+    if store_credit_applied > 0:
+        debit = await db.users.update_one(
+            {"id": order.user_id, "store_credits": {"$gte": store_credit_applied}},
+            {"$inc": {"store_credits": -store_credit_applied}},
+        )
+        if debit.matched_count != 1:
+            raise HTTPException(status_code=409, detail="Store credit changed. Please refresh and try again.")
+
+    try:
+        await db.orders.insert_one(order_obj.dict())
+    except Exception:
+        if store_credit_applied > 0:
+            await db.users.update_one(
+                {"id": order.user_id},
+                {"$inc": {"store_credits": store_credit_applied}},
+            )
+        raise
+
+    if store_credit_applied > 0:
+        updated_user = await db.users.find_one({"id": order.user_id})
+        balance_after = float((updated_user or {}).get("store_credits", 0.0) or 0.0)
+        await db.wallet_transactions.insert_one(
+            WalletTransaction(
+                user_id=order.user_id,
+                type="debit",
+                amount=store_credit_applied,
+                description=f"Store credit for order #{order_obj.id[:8]}",
+                category="purchase",
+                order_id=order_obj.id,
+                balance_after=balance_after,
+            ).dict()
+        )
     
     # Purchase points are awarded only after verified payment.
     # Do not mutate the user's reward balance while an order is unpaid.
