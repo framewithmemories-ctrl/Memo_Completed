@@ -39,7 +39,7 @@ export const EnhancedCheckoutPage = ({ onClose }) => {
     if (!user) return;
     setUserProfile(user);
     setFormData((p) => ({ ...p, name: user.name || '', email: user.email || '', phone: user.phone || '', address: user.address || p.address }));
-    axios.get(`${API}/users/${user.id}/wallet`).then((r) => setUserWallet({ balance: Number(r.data.store_credits || 0) })).catch(() => {});
+    axios.get(`${API}/users/${user.id}/wallet`).then((r) => setUserWallet({ balance: Number(r.data.balance ?? r.data.store_credits ?? 0) })).catch(() => {});
   }, [user]);
 
   const subtotal = () => cartItems.reduce((sum, item) => sum + item.price * item.quantity, 0);
