@@ -2,8 +2,7 @@ name: Apply wallet checkout integrity fix
 
 on:
   push:
-    branches:
-      - main
+    branches: [main]
 
 permissions:
   contents: write
@@ -15,95 +14,80 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-      - name: Apply narrow wallet checkout fix
+      - name: Repair wallet order accounting
         shell: python
         run: |
           from pathlib import Path
 
-          backend = Path('backend/server.py')
-          b = backend.read_text()
+          bpath = Path('backend/server.py')
+          b = bpath.read_text()
 
-          model_start = b.find('class OrderCreate')
-          model_end = b.find('class GiftQuizResponse', model_start)
-          model = b[model_start:model_end]
-          if 'use_store_credit: bool = False' not in model:
-              marker = '    pickup_slot: Optional[str] = None'
-              if marker not in model:
-                  raise SystemExit('OrderCreate marker not found')
-              model = model.replace(marker, marker + '\n    use_store_credit: bool = False', 1)
-              b = b[:model_start] + model + b[model_end:]
+          # Order model fields
+          if 'subtotal_amount: Optional[float] = None' not in b:
+              b = b.replace('    store_credit_applied: float = 0.0\n    payment_attempts: int = 0', '    store_credit_applied: float = 0.0\n    subtotal_amount: Optional[float] = None\n    delivery_amount: Optional[float] = None\n    tax_amount: Optional[float] = None\n    payment_method: Optional[str] = None\n    payment_attempts: int = 0', 1)
+          if 'payment_method: Optional[str] = None\n\nclass GiftQuizResponse' not in b:
+              b = b.replace('    use_store_credit: bool = False\n\nclass GiftQuizResponse', '    use_store_credit: bool = False\n    payment_method: Optional[str] = None\n\nclass GiftQuizResponse', 1)
+          if 'payment_method: Optional[str] = "razorpay"' not in b:
+              b = b.replace('    use_store_credit: bool = False\n\n\n# Razorpay single-transaction', '    use_store_credit: bool = False\n    payment_method: Optional[str] = "razorpay"\n\n\n# Razorpay single-transaction', 1)
 
-          route_start = b.find('@api_router.post("/orders", response_model=Order)')
-          route_end = b.find('\nclass PaymentVerifyRequest(BaseModel):', route_start)
-          if route_start < 0 or route_end < 0:
-              raise SystemExit('Order route boundaries not found')
-          route = b[route_start:route_end]
+          # Wallet applies against item subtotal only. Tax and delivery remain payable.
+          b = b.replace('min(available_credit, computed_subtotal + delivery_amount + tax_amount)', 'min(available_credit, computed_subtotal)')
+          b = b.replace('min(available, subtotal + delivery + tax)', 'min(available, subtotal)')
 
-          if 'server_final_amount' not in route:
-              old = '''    total = order.total_amount\n    if total is None or not math.isfinite(total) or total <= 0 or total > 5_000_000:\n        raise HTTPException(status_code=400, detail="Invalid order total")\n    # Reject grossly manipulated totals (client legitimately adds tax/delivery or subtracts discounts)\n    if total < computed_subtotal * 0.4:\n        raise HTTPException(status_code=400, detail="Order total does not match items")\n\n    # Points earned from validated subtotal (server-side), not client total\n    points_earned = int(computed_subtotal * 0.03)\n\n    order_dict = order.dict()\n    order_dict["points_earned"] = points_earned\n    order_obj = Order(**order_dict)\n    \n    await db.orders.insert_one(order_obj.dict())\n'''
-              new = '''    delivery_amount = 0.0 if (order.delivery_type == "pickup" or computed_subtotal >= 1000) else 50.0\n    tax_amount = round(computed_subtotal * 0.18)\n    user = await db.users.find_one({"id": order.user_id})\n    available_credit = float((user or {}).get("store_credits", 0.0) or 0.0)\n    store_credit_applied = 0.0\n    if order.use_store_credit:\n        store_credit_applied = max(0.0, min(available_credit, computed_subtotal + delivery_amount + tax_amount))\n    server_final_amount = round(max(0.0, computed_subtotal + delivery_amount + tax_amount - store_credit_applied), 2)\n\n    client_total = float(order.total_amount or 0)\n    if not math.isfinite(client_total) or client_total < 0 or client_total > 5_000_000:\n        raise HTTPException(status_code=400, detail="Invalid order total")\n    if abs(client_total - server_final_amount) > 0.01:\n        raise HTTPException(status_code=400, detail="Order total does not match server pricing")\n\n    points_earned = int(computed_subtotal * 0.03)\n    order_dict = order.dict()\n    order_dict["total_amount"] = server_final_amount\n    order_dict["store_credit_applied"] = round(store_credit_applied, 2)\n    order_dict["points_earned"] = points_earned\n    order_obj = Order(**order_dict)\n\n    if store_credit_applied > 0:\n        debit = await db.users.update_one(\n            {"id": order.user_id, "store_credits": {"$gte": store_credit_applied}},\n            {"$inc": {"store_credits": -store_credit_applied}},\n        )\n        if debit.matched_count != 1:\n            raise HTTPException(status_code=409, detail="Store credit changed. Please refresh and try again.")\n\n    try:\n        await db.orders.insert_one(order_obj.dict())\n    except Exception:\n        if store_credit_applied > 0:\n            await db.users.update_one(\n                {"id": order.user_id},\n                {"$inc": {"store_credits": store_credit_applied}},\n            )\n        raise\n\n    if store_credit_applied > 0:\n        updated_user = await db.users.find_one({"id": order.user_id})\n        balance_after = float((updated_user or {}).get("store_credits", 0.0) or 0.0)\n        await db.wallet_transactions.insert_one(\n            WalletTransaction(\n                user_id=order.user_id,\n                type="debit",\n                amount=store_credit_applied,\n                description=f"Store credit for order #{order_obj.id[:8]}",\n                category="purchase",\n                order_id=order_obj.id,\n                balance_after=balance_after,\n            ).dict()\n        )\n'''
-              if old not in route:
-                  raise SystemExit('Expected normal order pricing block not found')
-              route = route.replace(old, new, 1)
-              b = b[:route_start] + route + b[route_end:]
+          # Use wallet_balance consistently for the real customer wallet.
+          b = b.replace('{"id": order.user_id, "store_credits": {"$gte": store_credit_applied}}', '{"id": order.user_id, "wallet_balance": {"$gte": store_credit_applied}}')
+          b = b.replace('{"$inc": {"store_credits": -store_credit_applied}}', '{"$inc": {"wallet_balance": -store_credit_applied}}')
+          b = b.replace('{"$inc": {"store_credits": store_credit_applied}}', '{"$inc": {"wallet_balance": store_credit_applied}}')
+          b = b.replace('float((updated_user or {}).get("store_credits", 0.0) or 0.0)', 'float((updated_user or {}).get("wallet_balance", 0.0) or 0.0)')
+          b = b.replace('float(u.get("store_credits", 0.0) or 0.0) - sc', 'float(u.get("wallet_balance", 0.0) or 0.0) - sc')
+          b = b.replace('{"$set": {"store_credits": new_credit}}', '{"$set": {"wallet_balance": new_credit}}')
 
-          backend.write_text(b)
+          # Persist the complete financial breakdown on new orders.
+          if 'order_dict["subtotal_amount"]' not in b:
+              b = b.replace('    order_dict["store_credit_applied"] = round(store_credit_applied, 2)\n    order_dict["points_earned"] = points_earned', '    order_dict["store_credit_applied"] = round(store_credit_applied, 2)\n    order_dict["subtotal_amount"] = round(computed_subtotal, 2)\n    order_dict["delivery_amount"] = round(delivery_amount, 2)\n    order_dict["tax_amount"] = round(tax_amount, 2)\n    order_dict["payment_method"] = order.payment_method or "cod"\n    order_dict["points_earned"] = points_earned', 1)
+          if 'subtotal_amount=round(pricing["subtotal"], 2)' not in b:
+              b = b.replace('        store_credit_applied=pricing["store_credit_applied"],\n        payment_status="pending",', '        store_credit_applied=pricing["store_credit_applied"],\n        subtotal_amount=round(pricing["subtotal"], 2),\n        delivery_amount=round(pricing["delivery"], 2),\n        tax_amount=round(pricing["tax"], 2),\n        payment_method=payload.payment_method or "razorpay",\n        payment_status="pending",', 1)
+          bpath.write_text(b)
 
-          frontend = Path('frontend/src/components/EnhancedCheckoutPage.js')
-          f = frontend.read_text()
+          # Checkout sends the payment method for persistence.
+          cpath = Path('frontend/src/components/EnhancedCheckoutPage.js')
+          c = cpath.read_text()
+          if 'payment_method: "razorpay"' not in c:
+              c = c.replace('        use_store_credit: !!(useWalletBalance && user),\n      })).data;', '        use_store_credit: !!(useWalletBalance && user),\n        payment_method: "razorpay",\n      })).data;', 1)
+          if 'payment_method: "cod"' not in c:
+              c = c.replace('        use_store_credit: !!(useWalletBalance && user),\n      })).data;\n\n      const serverTotals', '        use_store_credit: !!(useWalletBalance && user),\n        payment_method: "cod",\n      })).data;\n\n      const serverTotals', 1)
+          cpath.write_text(c)
 
-          # The wallet endpoint historically exposes `balance`; some newer builds
-          # may expose `store_credits`. Accept both so the checkout UI remains
-          # compatible while the server stays authoritative for deduction.
-          old_wallet = "axios.get(`${API}/users/${user.id}/wallet`).then((r) => setUserWallet({ balance: r.data.store_credits || 0 })).catch(() => {});"
-          new_wallet = "axios.get(`${API}/users/${user.id}/wallet`).then((r) => setUserWallet({ balance: Number(r.data.balance ?? r.data.store_credits ?? 0) })).catch(() => {});"
-          if old_wallet in f:
-              f = f.replace(old_wallet, new_wallet, 1)
-          elif new_wallet not in f:
-              raise SystemExit('Wallet loader not found')
+          # Admin displays the stored financial breakdown.
+          apath = Path('frontend/src/components/AdminPanel.js')
+          a = apath.read_text()
+          a = a.replace('<p><span className="font-medium">Payment method:</span> {orderDetails.payment_method||\'Not recorded\'}</p>', '<p><span className="font-medium">Payment method:</span> {orderDetails.payment_method || (orderDetails.razorpay_payment_id ? \'razorpay\' : \'cod\')}</p>', 1)
+          marker = '<CardContent className="space-y-2 text-sm"><div className="flex justify-between"><span>Item subtotal</span>'
+          i = a.find(marker)
+          if i < 0: raise SystemExit('Admin totals marker not found')
+          j = a.find('</CardContent>', i)
+          block = a[i:j]
+          if 'Tax (GST 18%)' not in block:
+              replacement = '<CardContent className="space-y-2 text-sm"><div className="flex justify-between"><span>Item subtotal</span><span>₹{Number(orderDetails.subtotal_amount ?? (orderDetails.items||[]).reduce((sum,item)=>sum+Number(item.price||0)*Number(item.quantity||0),0)).toLocaleString()}</span></div><div className="flex justify-between"><span>Delivery</span><span>{Number(orderDetails.delivery_amount ?? 0) === 0 ? \'FREE\' : `₹${Number(orderDetails.delivery_amount).toLocaleString()}`}</span></div><div className="flex justify-between"><span>Tax (GST 18%)</span><span>₹{Number(orderDetails.tax_amount ?? 0).toLocaleString()}</span></div><div className="flex justify-between text-green-600"><span>Wallet discount</span><span>-₹{Number(orderDetails.store_credit_applied||0).toLocaleString()}</span></div><div className="flex justify-between border-t pt-2 font-bold"><span>Final total</span><span>₹{Number(orderDetails.total||orderDetails.total_amount||0).toLocaleString()}</span></div><p className="text-xs text-gray-500 pt-2">Wallet discounts apply to the item subtotal. Tax and delivery remain part of the final payable total.</p>'
+              a = a[:i] + replacement + a[j:]
+          apath.write_text(a)
+          print('repair complete')
 
-          payload_marker = '        delivery_address: address,\n      })).data;'
-          payload_replacement = '        delivery_address: address,\n        use_store_credit: !!(useWalletBalance && user),\n      })).data;'
-          if payload_marker in f:
-              f = f.replace(payload_marker, payload_replacement, 1)
-          elif 'use_store_credit: !!(useWalletBalance && user)' not in f:
-              raise SystemExit('Normal order payload marker not found')
-
-          old_wallet_pay = '''      if (useWalletBalance && user && totals.walletDiscount > 0) {\n        await axios.post(`${API}/users/${user.id}/wallet/pay`, null, {\n          params: { amount: totals.walletDiscount, order_id: order.id },\n        }).catch(() => {});\n      }\n\n      finalizeOrder(order, totals);'''
-          new_wallet_pay = '''      const serverTotals = {\n        ...totals,\n        walletDiscount: Number(order.store_credit_applied || 0),\n        final: Number(order.total_amount || 0),\n      };\n      finalizeOrder(order, serverTotals);'''
-          if old_wallet_pay in f:
-              f = f.replace(old_wallet_pay, new_wallet_pay, 1)
-          elif 'walletDiscount: Number(order.store_credit_applied || 0)' not in f:
-              raise SystemExit('Legacy wallet payment block not found')
-
-          frontend.write_text(f)
-
-          checks = [
-              ('backend OrderCreate flag', 'use_store_credit: bool = False', b),
-              ('backend server total', 'server_final_amount = round(', b),
-              ('backend stored credit', 'order_dict["store_credit_applied"] = round(store_credit_applied, 2)', b),
-              ('backend wallet debit', 'category="purchase"', b),
-              ('frontend wallet compatibility', 'r.data.balance ?? r.data.store_credits ?? 0', f),
-              ('frontend wallet flag', 'use_store_credit: !!(useWalletBalance && user)', f),
-              ('frontend server total', 'Number(order.total_amount || 0)', f),
-          ]
-          missing = [name for name, needle, hay in checks if needle not in hay]
-          if missing:
-              raise SystemExit('Verification failed: ' + ', '.join(missing))
-          print('Wallet checkout fix applied and verified.')
-
-      - name: Validate backend syntax
-        run: python -m py_compile backend/server.py
-
-      - name: Commit application fix
+      - name: Validate and commit
+        shell: bash
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add backend/server.py frontend/src/components/EnhancedCheckoutPage.js
-          if git diff --cached --quiet; then
-            echo "No application changes were needed."
-            exit 0
-          fi
-          git commit -m "fix: restore checkout wallet balance compatibility"
-          git push origin HEAD:main
+          python -m py_compile backend/server.py
+          grep -q 'wallet_balance' backend/server.py
+          grep -q 'subtotal_amount' backend/server.py
+          grep -q 'Tax (GST 18%)' frontend/src/components/AdminPanel.js
+          git add backend/server.py frontend/src/components/EnhancedCheckoutPage.js frontend/src/components/AdminPanel.js
+          git rm -f .github/workflows/one-shot-order-financial-fix.yml .github/order-financial-repair-trigger.txt 2>/dev/null || true
+          git add -u
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          if git diff --cached --quiet; then echo 'No application changes'; exit 0; fi
+          git commit -m 'fix: align wallet discount and admin order totals'
+          git push origin main
