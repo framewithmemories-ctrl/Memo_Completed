@@ -1,0 +1,137 @@
+name: One-shot order financial repair
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened]
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    if: startsWith(github.event.pull_request.head.ref, 'order-financial-repair') && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          repository: ${{ github.repository }}
+          fetch-depth: 0
+      - name: Patch backend and admin order records
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          # ---------- backend/server.py ----------
+          p = Path('backend/server.py')
+          s = p.read_text()
+
+          s = s.replace(
+              '    store_credit_applied: float = 0.0\n    payment_attempts: int = 0',
+              '    store_credit_applied: float = 0.0\n    subtotal_amount: Optional[float] = None\n    delivery_amount: Optional[float] = None\n    tax_amount: Optional[float] = None\n    payment_method: Optional[str] = None\n    payment_attempts: int = 0',
+              1,
+          )
+          s = s.replace(
+              '    use_store_credit: bool = False\n\nclass GiftQuizResponse',
+              '    use_store_credit: bool = False\n    payment_method: Optional[str] = None\n\nclass GiftQuizResponse',
+              1,
+          )
+          s = s.replace(
+              '    # Authoritative total: subtotal + delivery + GST - server-held store credit.\n    # Never trust the wallet amount or final total supplied by the browser.\n    delivery_amount = 0.0 if (order.delivery_type == "pickup" or computed_subtotal >= 1000) else 50.0\n    tax_amount = round(computed_subtotal * 0.18)\n    user = await db.users.find_one({"id": order.user_id})\n    available_credit = float((user or {}).get("wallet_balance", 0.0) or 0.0)\n    store_credit_applied = 0.0\n    if order.use_store_credit:\n        store_credit_applied = max(0.0, min(available_credit, computed_subtotal + delivery_amount + tax_amount))\n    server_final_amount = round(max(0.0, computed_subtotal + delivery_amount + tax_amount - store_credit_applied), 2)',
+              '    # Authoritative total: subtotal + delivery + GST - wallet discount.\n    # Wallet is a product-subtotal discount; tax and delivery remain payable.\n    delivery_amount = 0.0 if (order.delivery_type == "pickup" or computed_subtotal >= 1000) else 50.0\n    tax_amount = round(computed_subtotal * 0.18)\n    user = await db.users.find_one({"id": order.user_id})\n    available_credit = float((user or {}).get("wallet_balance", 0.0) or 0.0)\n    store_credit_applied = 0.0\n    if order.use_store_credit:\n        store_credit_applied = max(0.0, min(available_credit, computed_subtotal))\n    server_final_amount = round(max(0.0, computed_subtotal + delivery_amount + tax_amount - store_credit_applied), 2)',
+              1,
+          )
+          s = s.replace(
+              '    order_dict["store_credit_applied"] = round(store_credit_applied, 2)\n    order_dict["points_earned"] = points_earned',
+              '    order_dict["store_credit_applied"] = round(store_credit_applied, 2)\n    order_dict["subtotal_amount"] = round(computed_subtotal, 2)\n    order_dict["delivery_amount"] = round(delivery_amount, 2)\n    order_dict["tax_amount"] = round(tax_amount, 2)\n    order_dict["payment_method"] = order.payment_method or "cod"\n    order_dict["points_earned"] = points_earned',
+              1,
+          )
+
+          s = s.replace(
+              '    use_store_credit: bool = False\n\n\n# Razorpay single-transaction',
+              '    use_store_credit: bool = False\n    payment_method: Optional[str] = "razorpay"\n\n\n# Razorpay single-transaction',
+              1,
+          )
+          s = s.replace(
+              '    # Store credit applied server-side (never trusts a client amount); capped at pre-credit total\n    store_credit_applied = 0.0\n    if use_store_credit and user:\n        available = float(user.get("wallet_balance", 0.0) or 0.0)\n        store_credit_applied = max(0.0, min(available, subtotal + delivery + tax))\n    final_amount = max(0.0, subtotal + delivery + tax - store_credit_applied)',
+              '    # Wallet discount applies only to the product subtotal; tax and delivery remain payable.\n    store_credit_applied = 0.0\n    if use_store_credit and user:\n        available = float(user.get("wallet_balance", 0.0) or 0.0)\n        store_credit_applied = max(0.0, min(available, subtotal))\n    final_amount = max(0.0, subtotal + delivery + tax - store_credit_applied)',
+              1,
+          )
+          s = s.replace(
+              '        store_credit_applied=pricing["store_credit_applied"],\n        payment_status="pending",',
+              '        store_credit_applied=pricing["store_credit_applied"],\n        subtotal_amount=round(pricing["subtotal"], 2),\n        delivery_amount=round(pricing["delivery"], 2),\n        tax_amount=round(pricing["tax"], 2),\n        payment_method=payload.payment_method or "razorpay",\n        payment_status="pending",',
+              1,
+          )
+
+          p.write_text(s)
+
+          # ---------- frontend/src/components/EnhancedCheckoutPage.js ----------
+          p = Path('frontend/src/components/EnhancedCheckoutPage.js')
+          s = p.read_text()
+          s = s.replace(
+              '        use_store_credit: !!(useWalletBalance && user),\n      })).data;',
+              '        use_store_credit: !!(useWalletBalance && user),\n        payment_method: "razorpay",\n      })).data;',
+              1,
+          )
+          s = s.replace(
+              '        use_store_credit: !!(useWalletBalance && user),\n      })).data;\n\n      const serverTotals',
+              '        use_store_credit: !!(useWalletBalance && user),\n        payment_method: "cod",\n      })).data;\n\n      const serverTotals',
+              1,
+          )
+          # Use the server-returned wallet discount and total for the confirmation UI.
+          s = s.replace(
+              '        walletDiscount: Number(order.store_credit_applied || 0),\n        final: Number(order.total_amount || 0),',
+              '        walletDiscount: Number(order.store_credit_applied || 0),\n        delivery: Number(order.delivery_amount ?? totals.delivery),\n        tax: Number(order.tax_amount ?? totals.tax),\n        subtotal: Number(order.subtotal_amount ?? totals.subtotal),\n        final: Number(order.total_amount || 0),',
+              1,
+          )
+          p.write_text(s)
+
+          # ---------- frontend/src/components/AdminPanel.js ----------
+          p = Path('frontend/src/components/AdminPanel.js')
+          s = p.read_text()
+          old = '<p><span className="font-medium">Payment method:</span> {orderDetails.payment_method||\'Not recorded\'}</p><p><span className="font-medium">Payment ID:</span> {orderDetails.razorpay_payment_id||\'—\'}</p>'
+          new = '<p><span className="font-medium">Payment method:</span> {orderDetails.payment_method || (orderDetails.razorpay_payment_id ? \'razorpay\' : \'cod\')}</p><p><span className="font-medium">Payment ID:</span> {orderDetails.razorpay_payment_id||\'—\'}</p>'
+          if old not in s:
+              raise SystemExit('Admin payment method marker not found')
+          s = s.replace(old, new, 1)
+
+          old = '<CardContent className="space-y-2 text-sm"><div className="flex justify-between"><span>Item subtotal</span><span>₹{(orderDetails.items||[]).reduce((sum,item)=>sum+Number(item.price||0)*Number(item.quantity||0),0).toLocaleString()}</span></div><div className="flex justify-between"><span>Store credit applied</span><span>₹{Number(orderDetails.store_credit_applied||0).toLocaleString()}</span></div><div className="flex justify-between border-t pt-2 font-bold"><span>Final total</span><span>₹{Number(orderDetails.total||orderDetails.total_amount||0).toLocaleString()}</span></div><p className="text-xs text-gray-500 pt-2">Promo discount, shipping and tax are shown only when those values are explicitly stored on the order; they are not recalculated here.</p></CardContent>'
+          new = '<CardContent className="space-y-2 text-sm"><div className="flex justify-between"><span>Item subtotal</span><span>₹{Number(orderDetails.subtotal_amount ?? (orderDetails.items||[]).reduce((sum,item)=>sum+Number(item.price||0)*Number(item.quantity||0),0)).toLocaleString()}</span></div><div className="flex justify-between"><span>Delivery</span><span>{Number(orderDetails.delivery_amount ?? (((orderDetails.delivery_type === \'pickup\') || Number(orderDetails.subtotal_amount ?? (orderDetails.items||[]).reduce((sum,item)=>sum+Number(item.price||0)*Number(item.quantity||0),0)) >= 1000) ? 0 : 50)).toLocaleString() === \'0\' ? \'FREE\' : `₹${Number(orderDetails.delivery_amount ?? (((orderDetails.delivery_type === \'pickup\') || Number(orderDetails.subtotal_amount ?? (orderDetails.items||[]).reduce((sum,item)=>sum+Number(item.price||0)*Number(item.quantity||0),0)) >= 1000) ? 0 : 50)).toLocaleString()}`}</span></div><div className="flex justify-between"><span>Tax (GST 18%)</span><span>₹{Number(orderDetails.tax_amount ?? Math.round(Number(orderDetails.subtotal_amount ?? (orderDetails.items||[]).reduce((sum,item)=>sum+Number(item.price||0)*Number(item.quantity||0),0)) * 0.18)).toLocaleString()}</span></div><div className="flex justify-between text-green-600"><span>Wallet discount</span><span>-₹{Number(orderDetails.store_credit_applied||0).toLocaleString()}</span></div><div className="flex justify-between border-t pt-2 font-bold"><span>Final total</span><span>₹{Number(orderDetails.total||orderDetails.total_amount||0).toLocaleString()}</span></div><p className="text-xs text-gray-500 pt-2">Wallet discounts apply to the item subtotal. Tax and delivery remain part of the final payable total.</p></CardContent>'
+          if old not in s:
+              raise SystemExit('Admin totals marker not found')
+          s = s.replace(old, new, 1)
+          p.write_text(s)
+
+          print('order financial repair patch applied')
+          PY
+      - name: Verify repair
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          b = Path('backend/server.py').read_text()
+          a = Path('frontend/src/components/AdminPanel.js').read_text()
+          c = Path('frontend/src/components/EnhancedCheckoutPage.js').read_text()
+          checks = [
+            ('wallet subtotal cap', 'store_credit_applied = max(0.0, min(available_credit, computed_subtotal))' in b),
+            ('wallet pricing subtotal cap', 'store_credit_applied = max(0.0, min(available, subtotal))' in b),
+            ('wallet debit field', '"$inc": {"wallet_balance": -store_credit_applied}' in b),
+            ('stored tax', 'tax_amount=round(pricing["tax"], 2)' in b),
+            ('payment method model', 'payment_method: Optional[str] = None' in b),
+            ('admin tax', 'Tax (GST 18%)' in a),
+            ('admin wallet', 'Wallet discount' in a),
+            ('checkout COD method', 'payment_method: "cod"' in c),
+            ('checkout Razorpay method', 'payment_method: "razorpay"' in c),
+          ]
+          for name, ok in checks:
+              if not ok: raise SystemExit(f'failed check: {name}')
+          print('order financial repair verified')
+          PY
+      - name: Remove one-shot workflow and trigger file if present
+        run: |
+          git rm -f .github/workflows/one-shot-order-financial-fix.yml .github/order-financial-repair-trigger.txt 2>/dev/null || true
+          git add backend/server.py frontend/src/components/EnhancedCheckoutPage.js frontend/src/components/AdminPanel.js
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'fix: align wallet discount and admin order totals'
+          git push origin HEAD:${{ github.event.pull_request.head.ref }}
