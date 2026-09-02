@@ -1,7 +1,8 @@
 name: One-shot wallet backend repair v2
 
 on:
-  push:
+  pull_request_target:
+    types: [opened, synchronize]
     branches: [main]
 
 permissions:
@@ -9,10 +10,14 @@ permissions:
 
 jobs:
   repair:
-    if: github.actor != 'github-actions[bot]'
+    if: github.event.pull_request.head.ref == 'wallet-backend-repair' && github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          repository: ${{ github.repository }}
+          fetch-depth: 0
       - name: Patch wallet source of truth
         run: |
           python - <<'PY'
@@ -26,8 +31,16 @@ jobs:
                'available = float(user.get("wallet_balance", 0.0) or 0.0)'),
               ('float(u.get("store_credits", 0.0) or 0.0) - sc',
                'float(u.get("wallet_balance", 0.0) or 0.0) - sc'),
-              ('{\"$set\": {\"store_credits\": new_credit}}',
-               '{\"$set\": {\"wallet_balance\": new_credit}}'),
+              ('{"$set": {"store_credits": new_credit}}',
+               '{"$set": {"wallet_balance": new_credit}}'),
+              ('{"id": order.user_id, "store_credits": {"$gte": store_credit_applied}}',
+               '{"id": order.user_id, "wallet_balance": {"$gte": store_credit_applied}}'),
+              ('{"$inc": {"store_credits": -store_credit_applied}}',
+               '{"$inc": {"wallet_balance": -store_credit_applied}}'),
+              ('{"$inc": {"store_credits": store_credit_applied}}',
+               '{"$inc": {"wallet_balance": store_credit_applied}}'),
+              ('float((updated_user or {}).get("store_credits", 0.0) or 0.0)',
+               'float((updated_user or {}).get("wallet_balance", 0.0) or 0.0)'),
           ]
           for old, new in replacements:
               if old not in s:
@@ -45,6 +58,10 @@ jobs:
               'available = float(user.get("wallet_balance", 0.0) or 0.0)',
               'float(u.get("wallet_balance", 0.0) or 0.0) - sc',
               '{"$set": {"wallet_balance": new_credit}}',
+              '{"id": order.user_id, "wallet_balance": {"$gte": store_credit_applied}}',
+              '{"$inc": {"wallet_balance": -store_credit_applied}}',
+              '{"$inc": {"wallet_balance": store_credit_applied}}',
+              'float((updated_user or {}).get("wallet_balance", 0.0) or 0.0)',
           ]
           for text in required:
               assert text in s, text
@@ -57,4 +74,4 @@ jobs:
           git rm .github/workflows/one-shot-wallet-backend-fix.yml
           git add backend/server.py
           git commit -m 'fix: use wallet balance for checkout discount'
-          git push
+          git push origin HEAD:${{ github.event.pull_request.head.ref }}
