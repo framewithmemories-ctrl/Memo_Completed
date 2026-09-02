@@ -18,21 +18,13 @@ jobs:
           ref: ${{ github.event.pull_request.head.ref }}
           repository: ${{ github.repository }}
           fetch-depth: 0
-      - name: Patch wallet source of truth
+      - name: Patch wallet debit paths
         run: |
           python - <<'PY'
           from pathlib import Path
           p = Path('backend/server.py')
           s = p.read_text()
           replacements = [
-              ('available_credit = float((user or {}).get("store_credits", 0.0) or 0.0)',
-               'available_credit = float((user or {}).get("wallet_balance", 0.0) or 0.0)'),
-              ('available = float(user.get("store_credits", 0.0) or 0.0)',
-               'available = float(user.get("wallet_balance", 0.0) or 0.0)'),
-              ('float(u.get("store_credits", 0.0) or 0.0) - sc',
-               'float(u.get("wallet_balance", 0.0) or 0.0) - sc'),
-              ('{"$set": {"store_credits": new_credit}}',
-               '{"$set": {"wallet_balance": new_credit}}'),
               ('{"id": order.user_id, "store_credits": {"$gte": store_credit_applied}}',
                '{"id": order.user_id, "wallet_balance": {"$gte": store_credit_applied}}'),
               ('{"$inc": {"store_credits": -store_credit_applied}}',
@@ -42,22 +34,21 @@ jobs:
               ('float((updated_user or {}).get("store_credits", 0.0) or 0.0)',
                'float((updated_user or {}).get("wallet_balance", 0.0) or 0.0)'),
           ]
+          changed = 0
           for old, new in replacements:
-              if old not in s:
-                  raise SystemExit(f'Missing expected source text: {old}')
-              s = s.replace(old, new)
+              if old in s:
+                  s = s.replace(old, new)
+                  changed += 1
+          if changed != len(replacements):
+              raise SystemExit(f'Expected {len(replacements)} wallet debit replacements, applied {changed}')
           p.write_text(s)
           PY
-      - name: Verify patch
+      - name: Verify wallet paths
         run: |
           python - <<'PY'
           from pathlib import Path
           s = Path('backend/server.py').read_text()
           required = [
-              'available_credit = float((user or {}).get("wallet_balance", 0.0) or 0.0)',
-              'available = float(user.get("wallet_balance", 0.0) or 0.0)',
-              'float(u.get("wallet_balance", 0.0) or 0.0) - sc',
-              '{"$set": {"wallet_balance": new_credit}}',
               '{"id": order.user_id, "wallet_balance": {"$gte": store_credit_applied}}',
               '{"$inc": {"wallet_balance": -store_credit_applied}}',
               '{"$inc": {"wallet_balance": store_credit_applied}}',
@@ -65,13 +56,14 @@ jobs:
           ]
           for text in required:
               assert text in s, text
-          print('wallet backend patch verified')
+          print('wallet debit paths verified')
           PY
       - name: Commit repair and remove one-shot workflow
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git rm .github/workflows/one-shot-wallet-backend-fix.yml
+          git rm .github/wallet-repair-trigger.txt
           git add backend/server.py
           git commit -m 'fix: use wallet balance for checkout discount'
           git push origin HEAD:${{ github.event.pull_request.head.ref }}
