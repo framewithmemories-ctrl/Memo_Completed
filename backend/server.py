@@ -1081,7 +1081,7 @@ async def create_order(order: OrderCreate, current=Depends(get_current_user)):
     delivery_amount = 0.0 if (order.delivery_type == "pickup" or computed_subtotal >= 1000) else 50.0
     tax_amount = round(computed_subtotal * 0.18)
     user = await db.users.find_one({"id": order.user_id})
-    available_credit = float((user or {}).get("store_credits", 0.0) or 0.0)
+    available_credit = float((user or {}).get("wallet_balance", 0.0) or 0.0)
     store_credit_applied = 0.0
     if order.use_store_credit:
         store_credit_applied = max(0.0, min(available_credit, computed_subtotal + delivery_amount + tax_amount))
@@ -1217,7 +1217,7 @@ async def _compute_order_pricing(items: list, delivery_type: str, use_store_cred
     # Store credit applied server-side (never trusts a client amount); capped at pre-credit total
     store_credit_applied = 0.0
     if use_store_credit and user:
-        available = float(user.get("store_credits", 0.0) or 0.0)
+        available = float(user.get("wallet_balance", 0.0) or 0.0)
         store_credit_applied = max(0.0, min(available, subtotal + delivery + tax))
     final_amount = max(0.0, subtotal + delivery + tax - store_credit_applied)
     return {
@@ -1401,11 +1401,11 @@ async def verify_payment(payload: PaymentVerifyRequest, current=Depends(get_curr
             if u:
                 new_credit = max(
                     0.0,
-                    float(u.get("store_credits", 0.0) or 0.0) - sc,
+                    float(u.get("wallet_balance", 0.0) or 0.0) - sc,
                 )
                 await db.users.update_one(
                     {"id": order["user_id"]},
-                    {"$set": {"store_credits": new_credit}},
+                    {"$set": {"wallet_balance": new_credit}},
                 )
                 await db.wallet_transactions.insert_one(
                     WalletTransaction(
