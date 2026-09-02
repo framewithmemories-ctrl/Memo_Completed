@@ -1,0 +1,60 @@
+name: One-shot wallet backend repair v2
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Patch wallet source of truth
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('backend/server.py')
+          s = p.read_text()
+          replacements = [
+              ('available_credit = float((user or {}).get("store_credits", 0.0) or 0.0)',
+               'available_credit = float((user or {}).get("wallet_balance", 0.0) or 0.0)'),
+              ('available = float(user.get("store_credits", 0.0) or 0.0)',
+               'available = float(user.get("wallet_balance", 0.0) or 0.0)'),
+              ('float(u.get("store_credits", 0.0) or 0.0) - sc',
+               'float(u.get("wallet_balance", 0.0) or 0.0) - sc'),
+              ('{\"$set\": {\"store_credits\": new_credit}}',
+               '{\"$set\": {\"wallet_balance\": new_credit}}'),
+          ]
+          for old, new in replacements:
+              if old not in s:
+                  raise SystemExit(f'Missing expected source text: {old}')
+              s = s.replace(old, new)
+          p.write_text(s)
+          PY
+      - name: Verify patch
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          s = Path('backend/server.py').read_text()
+          required = [
+              'available_credit = float((user or {}).get("wallet_balance", 0.0) or 0.0)',
+              'available = float(user.get("wallet_balance", 0.0) or 0.0)',
+              'float(u.get("wallet_balance", 0.0) or 0.0) - sc',
+              '{"$set": {"wallet_balance": new_credit}}',
+          ]
+          for text in required:
+              assert text in s, text
+          print('wallet backend patch verified')
+          PY
+      - name: Commit repair and remove one-shot workflow
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git rm .github/workflows/one-shot-wallet-backend-fix.yml
+          git add backend/server.py
+          git commit -m 'fix: use wallet balance for checkout discount'
+          git push
