@@ -89,6 +89,7 @@ export const EnhancedCheckoutPage = ({ onClose }) => {
         delivery_type: formData.deliveryType,
         delivery_address: address,
         use_store_credit: !!(useWalletBalance && user),
+        payment_method: "razorpay",
       })).data;
     } catch (err) {
       toast.error(err.response?.data?.detail || 'Could not start payment. Please try again.');
@@ -171,6 +172,7 @@ export const EnhancedCheckoutPage = ({ onClose }) => {
         delivery_type: formData.deliveryType,
         delivery_address: address,
         use_store_credit: !!(useWalletBalance && user),
+        payment_method: "cod",
       })).data;
 
       const serverTotals = {
