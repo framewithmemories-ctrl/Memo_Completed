@@ -411,6 +411,10 @@ class Order(BaseModel):
     razorpay_order_id: Optional[str] = None
     razorpay_payment_id: Optional[str] = None
     store_credit_applied: float = 0.0
+    subtotal_amount: Optional[float] = None
+    delivery_amount: Optional[float] = None
+    tax_amount: Optional[float] = None
+    payment_method: Optional[str] = None
     payment_attempts: int = 0
     payment_updated_at: Optional[datetime] = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
@@ -423,6 +427,7 @@ class OrderCreate(BaseModel):
     delivery_address: Optional[dict] = None
     pickup_slot: Optional[str] = None
     use_store_credit: bool = False
+    payment_method: Optional[str] = None
 
 class GiftQuizResponse(BaseModel):
     recipient: str
@@ -1076,15 +1081,15 @@ async def create_order(order: OrderCreate, current=Depends(get_current_user)):
         item["price"] = expected_price
         computed_subtotal += expected_price * qty
 
-    # Authoritative total: subtotal + delivery + GST - server-held store credit.
-    # Never trust the wallet amount or final total supplied by the browser.
+    # Authoritative total: subtotal + delivery + GST - wallet discount.
+    # Wallet is a product-subtotal discount; tax and delivery remain payable.
     delivery_amount = 0.0 if (order.delivery_type == "pickup" or computed_subtotal >= 1000) else 50.0
     tax_amount = round(computed_subtotal * 0.18)
     user = await db.users.find_one({"id": order.user_id})
     available_credit = float((user or {}).get("wallet_balance", 0.0) or 0.0)
     store_credit_applied = 0.0
     if order.use_store_credit:
-        store_credit_applied = max(0.0, min(available_credit, computed_subtotal + delivery_amount + tax_amount))
+        store_credit_applied = max(0.0, min(available_credit, computed_subtotal))
     server_final_amount = round(max(0.0, computed_subtotal + delivery_amount + tax_amount - store_credit_applied), 2)
 
     client_total = float(order.total_amount or 0)
@@ -1097,6 +1102,10 @@ async def create_order(order: OrderCreate, current=Depends(get_current_user)):
     order_dict = order.dict()
     order_dict["total_amount"] = server_final_amount
     order_dict["store_credit_applied"] = round(store_credit_applied, 2)
+    order_dict["subtotal_amount"] = round(computed_subtotal, 2)
+    order_dict["delivery_amount"] = round(delivery_amount, 2)
+    order_dict["tax_amount"] = round(tax_amount, 2)
+    order_dict["payment_method"] = order.payment_method or "cod"
     order_dict["points_earned"] = points_earned
     order_obj = Order(**order_dict)
 
@@ -1155,6 +1164,7 @@ class PaymentCreateRequest(BaseModel):
     delivery_address: Optional[dict] = None
     pickup_slot: Optional[str] = None
     use_store_credit: bool = False
+    payment_method: Optional[str] = "razorpay"
 
 
 # Razorpay single-transaction ceiling (₹5,00,000). Reject anything above before calling the API.
@@ -1214,11 +1224,11 @@ async def _compute_order_pricing(items: list, delivery_type: str, use_store_cred
 
     delivery = 0.0 if (delivery_type == "pickup" or subtotal >= 1000) else 50.0
     tax = round(subtotal * 0.18)
-    # Store credit applied server-side (never trusts a client amount); capped at pre-credit total
+    # Wallet discount applies only to the product subtotal; tax and delivery remain payable.
     store_credit_applied = 0.0
     if use_store_credit and user:
         available = float(user.get("wallet_balance", 0.0) or 0.0)
-        store_credit_applied = max(0.0, min(available, subtotal + delivery + tax))
+        store_credit_applied = max(0.0, min(available, subtotal))
     final_amount = max(0.0, subtotal + delivery + tax - store_credit_applied)
     return {
         "subtotal": subtotal, "delivery": delivery, "tax": tax,
@@ -1280,6 +1290,10 @@ async def create_payment_order(payload: PaymentCreateRequest, current=Depends(ge
         pickup_slot=payload.pickup_slot,
         points_earned=pricing["points_earned"],
         store_credit_applied=pricing["store_credit_applied"],
+        subtotal_amount=round(pricing["subtotal"], 2),
+        delivery_amount=round(pricing["delivery"], 2),
+        tax_amount=round(pricing["tax"], 2),
+        payment_method=payload.payment_method or "razorpay",
         payment_status="pending",
         order_status="pending",
     )
