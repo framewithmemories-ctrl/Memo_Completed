@@ -1105,8 +1105,8 @@ async def create_order(order: OrderCreate, current=Depends(get_current_user)):
     # and deduct credit only after payment verification.
     if store_credit_applied > 0:
         debit = await db.users.update_one(
-            {"id": order.user_id, "store_credits": {"$gte": store_credit_applied}},
-            {"$inc": {"store_credits": -store_credit_applied}},
+            {"id": order.user_id, "wallet_balance": {"$gte": store_credit_applied}},
+            {"$inc": {"wallet_balance": -store_credit_applied}},
         )
         if debit.matched_count != 1:
             raise HTTPException(status_code=409, detail="Store credit changed. Please refresh and try again.")
@@ -1117,13 +1117,13 @@ async def create_order(order: OrderCreate, current=Depends(get_current_user)):
         if store_credit_applied > 0:
             await db.users.update_one(
                 {"id": order.user_id},
-                {"$inc": {"store_credits": store_credit_applied}},
+                {"$inc": {"wallet_balance": store_credit_applied}},
             )
         raise
 
     if store_credit_applied > 0:
         updated_user = await db.users.find_one({"id": order.user_id})
-        balance_after = float((updated_user or {}).get("store_credits", 0.0) or 0.0)
+        balance_after = float((updated_user or {}).get("wallet_balance", 0.0) or 0.0)
         await db.wallet_transactions.insert_one(
             WalletTransaction(
                 user_id=order.user_id,
