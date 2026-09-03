@@ -27,6 +27,27 @@ const setAuthHeader = (token) => {
   }
 };
 
+// Recover the latest stored session token before every API request. This prevents
+// early component effects from sending protected requests before React state has settled.
+const getStoredToken = () => {
+  try {
+    const saved = localStorage.getItem('memoriesAuth');
+    const parsed = saved ? JSON.parse(saved) : null;
+    return parsed?.token || null;
+  } catch (e) {
+    return null;
+  }
+};
+
+axios.interceptors.request.use((config) => {
+  const token = getStoredToken();
+  if (token && !config.headers?.Authorization) {
+    config.headers = config.headers || {};
+    config.headers.Authorization = `Bearer ${token}`;
+  }
+  return config;
+});
+
 // Mirror auth user into the legacy localStorage keys other components rely on
 const syncLegacyProfile = (user) => {
   if (!user) {
@@ -123,6 +144,13 @@ export const AuthProvider = ({ children }) => {
     return res.data.user;
   }, []);
 
+  const refreshUser = useCallback(async () => {
+    const res = await axios.get(`${API}/auth/me`);
+    setUser(res.data.user);
+    syncLegacyProfile(res.data.user);
+    return res.data.user;
+  }, []);
+
   const logout = useCallback(() => {
     localStorage.removeItem('memoriesAuth');
     setAuthHeader(null);
@@ -132,7 +160,7 @@ export const AuthProvider = ({ children }) => {
   }, []);
 
   return (
-    <AuthContext.Provider value={{ user, token, loading, login, register, changePassword, logout, isAuthenticated: !!user }}>
+    <AuthContext.Provider value={{ user, token, loading, login, register, changePassword, refreshUser, logout, isAuthenticated: !!user }}>
       {children}
     </AuthContext.Provider>
   );
