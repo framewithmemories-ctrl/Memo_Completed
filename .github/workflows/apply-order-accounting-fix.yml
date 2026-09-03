@@ -26,7 +26,6 @@ jobs:
           from pathlib import Path
           import re
 
-          # Backend: add idempotency flags to orders.
           p = Path("backend/server.py")
           s = p.read_text(encoding="utf-8")
           if "points_awarded: bool = False" not in s:
@@ -35,15 +34,13 @@ jobs:
                   raise SystemExit("Order model anchor not found")
               s = s.replace(anchor, '    payment_method: Optional[str] = None\n    points_awarded: bool = False\n    spent_recorded: bool = False\n    payment_attempts: int = 0\n', 1)
 
-          # COD: the UI promises points at checkout, so commit points + spent once.
           if 'if (order.payment_method or "cod").lower() == "cod" and order.user_id:' not in s:
               anchor = '''    # Purchase points are awarded only after verified payment.\n    # Do not mutate the user's reward balance while an order is unpaid.\n\n    return order_obj\n'''
-              replacement = '''    if (order.payment_method or "cod").lower() == "cod" and order.user_id:\n        pts = int(order_obj.points_earned or 0)\n        inc = {"total_spent": float(order_obj.total_amount)}\n        if pts > 0:\n            inc["points"] = pts\n        await db.users.update_one({"id": order.user_id}, {"$inc": inc})\n        await db.orders.update_one(\n            {"id": order_obj.id},\n            {"$set": {"points_awarded": True, "spent_recorded": True}},\n        )\n        if pts > 0:\n            u = await db.users.find_one({"id": order.user_id})\n            new_points = int((u or {}).get("points", 0) or 0)\n            new_tier = "Platinum" if new_points >= 5000 else "Gold" if new_points >= 2000 else "Silver"\n            await db.users.update_one({"id": order.user_id}, {"$set": {"tier": new_tier}})\n            await db.wallet_transactions.insert_one(\n                WalletTransaction(\n                    user_id=order.user_id,\n                    type="credit",\n                    amount=pts,\n                    description=f"Reward points for order #{order_obj.id[:8]}",\n                    category="rewards",\n                    order_id=order_obj.id,\n                    balance_after=float((u or {}).get("wallet_balance", 0.0) or 0.0),\n                    is_points=True,\n                ).dict()\n            )\n\n    return order_obj\n'''
+              replacement = '''    if (order.payment_method or "cod").lower() == "cod" and order.user_id:\n        pts = int(order_obj.points_earned or 0)\n        inc = {"total_spent": float(order_obj.total_amount)}\n        if pts > 0:\n            inc["points"] = pts\n        await db.users.update_one({"id": order.user_id}, {"$inc": inc})\n        await db.orders.update_one(\n            {"id": order_obj.id},\n            {"$set": {"points_awarded": True, "spent_recorded": True}},\n        )\n        if pts > 0:\n            u = await db.users.find_one({"id": order.user_id})\n            new_points = int((u or {}).get("points", 0) or 0)\n            new_tier = "Platinum" if new_points >= 5000 else "Gold" if new_points >= 2000 else "Silver"\n            await db.users.update_one({"id": order.user_id}, {"$set": {"tier": new_tier}})\n            await db.wallet_transactions.insert_one(\n                WalletTransaction(\n                    user_id=order.user_id, type="credit", amount=pts,\n                    description=f"Reward points for order #{order_obj.id[:8]}",\n                    category="rewards", order_id=order_obj.id,\n                    balance_after=float((u or {}).get("wallet_balance", 0.0) or 0.0),\n                    is_points=True,\n                ).dict()\n            )\n\n    return order_obj\n'''
               if anchor not in s:
                   raise SystemExit("COD accounting anchor not found")
               s = s.replace(anchor, replacement, 1)
 
-          # Razorpay: replace the old points-only block with points + spent accounting.
           if 'if not current_order.get("spent_recorded"):' not in s:
               pattern = re.compile(r'''    # Award purchase points once \(idempotent via payment_status transition above\)\n    pts = int\(order\.get\("points_earned", 0\) or 0\)\n    if pts > 0 and order\.get\("user_id"\):\n.*?\n    # TODO\(webhook-sprint\):''', re.S)
               replacement = '''    # Award purchase points and spending once after verified payment.\n    if order.get("user_id"):\n        current_order = await db.orders.find_one({"id": payload.order_id}) or order\n        pts = int(order.get("points_earned", 0) or 0)\n        if not current_order.get("points_awarded"):\n            u = await db.users.find_one({"id": order["user_id"]})\n            if u:\n                new_points = int(u.get("points", 0) or 0) + pts\n                new_tier = "Platinum" if new_points >= 5000 else "Gold" if new_points >= 2000 else "Silver"\n                await db.users.update_one(\n                    {"id": order["user_id"]},\n                    {"$inc": {"points": pts}, "$set": {"tier": new_tier}},\n                )\n                await db.orders.update_one(\n                    {"id": payload.order_id, "points_awarded": {"$ne": True}},\n                    {"$set": {"points_awarded": True}},\n                )\n                if pts > 0:\n                    await db.wallet_transactions.insert_one(\n                        WalletTransaction(\n                            user_id=order["user_id"], type="credit", amount=pts,\n                            description=f"Reward points for order #{payload.order_id[:8]}",\n                            category="rewards", order_id=payload.order_id,\n                            balance_after=float(u.get("wallet_balance", 0.0) or 0.0), is_points=True,\n                        ).dict()\n                    )\n        if not current_order.get("spent_recorded"):\n            await db.users.update_one(\n                {"id": order["user_id"]},\n                {"$inc": {"total_spent": float(order.get("total_amount", 0.0) or 0.0)}},\n            )\n            await db.orders.update_one(\n                {"id": payload.order_id, "spent_recorded": {"$ne": True}},\n                {"$set": {"spent_recorded": True}},\n            )\n\n    # TODO(webhook-sprint):'''
@@ -53,7 +50,6 @@ jobs:
               s = s2
           p.write_text(s, encoding="utf-8")
 
-          # Frontend: refresh cached auth profile whenever the user returns to the tab.
           p = Path("frontend/src/context/AuthContext.js")
           s = p.read_text(encoding="utf-8")
           if "const refreshUser = useCallback" not in s:
@@ -64,7 +60,6 @@ jobs:
               s = s.replace(anchor, replacement, 1)
           p.write_text(s, encoding="utf-8")
 
-          # AccountButton: keep profile state aligned with wallet/profile API values.
           p = Path("frontend/src/components/AccountButton.js")
           s = p.read_text(encoding="utf-8")
           if "refreshUser" not in s.split("export const AccountButton",1)[1].split("return",1)[0]:
@@ -90,7 +85,7 @@ jobs:
       - name: Build frontend
         working-directory: frontend
         run: |
-          npm ci
+          npm install
           CI=true npm run build
 
       - name: Commit source changes
