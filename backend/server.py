@@ -415,6 +415,8 @@ class Order(BaseModel):
     delivery_amount: Optional[float] = None
     tax_amount: Optional[float] = None
     payment_method: Optional[str] = None
+    points_awarded: bool = False
+    spent_recorded: bool = False
     payment_attempts: int = 0
     payment_updated_at: Optional[datetime] = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
@@ -1145,8 +1147,30 @@ async def create_order(order: OrderCreate, current=Depends(get_current_user)):
             ).dict()
         )
     
-    # Purchase points are awarded only after verified payment.
-    # Do not mutate the user's reward balance while an order is unpaid.
+    if (order.payment_method or "cod").lower() == "cod" and order.user_id:
+        pts = int(order_obj.points_earned or 0)
+        inc = {"total_spent": float(order_obj.total_amount)}
+        if pts > 0:
+            inc["points"] = pts
+        await db.users.update_one({"id": order.user_id}, {"$inc": inc})
+        await db.orders.update_one(
+            {"id": order_obj.id},
+            {"$set": {"points_awarded": True, "spent_recorded": True}},
+        )
+        if pts > 0:
+            u = await db.users.find_one({"id": order.user_id})
+            new_points = int((u or {}).get("points", 0) or 0)
+            new_tier = "Platinum" if new_points >= 5000 else "Gold" if new_points >= 2000 else "Silver"
+            await db.users.update_one({"id": order.user_id}, {"$set": {"tier": new_tier}})
+            await db.wallet_transactions.insert_one(
+                WalletTransaction(
+                    user_id=order.user_id, type="credit", amount=pts,
+                    description=f"Reward points for order #{order_obj.id[:8]}",
+                    category="rewards", order_id=order_obj.id,
+                    balance_after=float((u or {}).get("wallet_balance", 0.0) or 0.0),
+                    is_points=True,
+                ).dict()
+            )
 
     return order_obj
 
@@ -1433,22 +1457,40 @@ async def verify_payment(payload: PaymentVerifyRequest, current=Depends(get_curr
                     ).dict()
                 )
 
-    # Award purchase points once (idempotent via payment_status transition above)
-    pts = int(order.get("points_earned", 0) or 0)
-    if pts > 0 and order.get("user_id"):
-        u = await db.users.find_one({"id": order["user_id"]})
-        if u:
-            new_points = int(u.get("points", 0) or 0) + pts
-            new_tier = (
-                "Platinum"
-                if new_points >= 5000
-                else "Gold"
-                if new_points >= 2000
-                else "Silver"
-            )
+    # Award purchase points and spending once after verified payment.
+    if order.get("user_id"):
+        current_order = await db.orders.find_one({"id": payload.order_id}) or order
+        pts = int(order.get("points_earned", 0) or 0)
+        if not current_order.get("points_awarded"):
+            u = await db.users.find_one({"id": order["user_id"]})
+            if u:
+                new_points = int(u.get("points", 0) or 0) + pts
+                new_tier = "Platinum" if new_points >= 5000 else "Gold" if new_points >= 2000 else "Silver"
+                await db.users.update_one(
+                    {"id": order["user_id"]},
+                    {"$inc": {"points": pts}, "$set": {"tier": new_tier}},
+                )
+                await db.orders.update_one(
+                    {"id": payload.order_id, "points_awarded": {"$ne": True}},
+                    {"$set": {"points_awarded": True}},
+                )
+                if pts > 0:
+                    await db.wallet_transactions.insert_one(
+                        WalletTransaction(
+                            user_id=order["user_id"], type="credit", amount=pts,
+                            description=f"Reward points for order #{payload.order_id[:8]}",
+                            category="rewards", order_id=payload.order_id,
+                            balance_after=float(u.get("wallet_balance", 0.0) or 0.0), is_points=True,
+                        ).dict()
+                    )
+        if not current_order.get("spent_recorded"):
             await db.users.update_one(
                 {"id": order["user_id"]},
-                {"$set": {"points": new_points, "tier": new_tier}},
+                {"$inc": {"total_spent": float(order.get("total_amount", 0.0) or 0.0)}},
+            )
+            await db.orders.update_one(
+                {"id": payload.order_id, "spent_recorded": {"$ne": True}},
+                {"$set": {"spent_recorded": True}},
             )
 
     # TODO(webhook-sprint): a future Razorpay webhook should reconcile captured/failed/refund

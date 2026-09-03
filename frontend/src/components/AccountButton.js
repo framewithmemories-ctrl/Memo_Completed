@@ -74,7 +74,7 @@ const tabItems = [
 ];
 
 export const AccountButton = () => {
-  const { user, isAuthenticated, token, login, register, changePassword, logout } = useAuth();
+  const { user, isAuthenticated, token, login, register, changePassword, refreshUser, logout } = useAuth();
   const [open, setOpen] = useState(false);
   const [mode, setMode] = useState('login');
   const [loading, setLoading] = useState(false);
@@ -151,7 +151,8 @@ export const AccountButton = () => {
         <div className="mt-5 min-h-[260px]">
           {activeTab === 'profile' && <Card className="border-rose-200"><CardHeader className="pb-3"><div className="flex items-center gap-3"><div className="w-16 h-16 bg-gradient-to-br from-rose-500 to-pink-500 rounded-full flex items-center justify-center"><span className="text-white font-bold text-2xl">{user?.name?.charAt(0)?.toUpperCase() || 'M'}</span></div><div><CardTitle className="text-xl text-gray-900">{user?.name || 'Memories Customer'}</CardTitle><CardDescription>Member since {user?.created_at ? new Date(user.created_at).toLocaleDateString('en-IN') : 'today'}</CardDescription><Badge className="bg-green-100 text-green-800 mt-1">{user?.tier || 'Silver'} Member</Badge></div></div></CardHeader><CardContent className="space-y-4"><div className="grid grid-cols-1 md:grid-cols-2 gap-4"><div className="flex items-center gap-3"><Mail className="w-4 h-4 text-gray-500" /><span className="text-gray-700 break-all">{user?.email || 'Not provided'}</span></div><div className="flex items-center gap-3"><Phone className="w-4 h-4 text-gray-500" /><span className="text-gray-700">{user?.phone || 'Not provided'}</span></div></div>{user?.address && <div className="flex items-start gap-3"><MapPin className="w-4 h-4 text-gray-500 mt-1" /><span className="text-gray-700">{user.address}</span></div>}<div className="grid grid-cols-3 gap-3 pt-2"><div className="bg-rose-50 rounded-lg p-3 text-center"><p className="text-xs text-gray-500">Wallet</p><p className="font-bold text-rose-600">₹{safeNumber(user?.wallet_balance).toLocaleString('en-IN')}</p></div><div className="bg-yellow-50 rounded-lg p-3 text-center"><p className="text-xs text-gray-500">Points</p><p className="font-bold text-yellow-600"><Star className="w-3 h-3 inline mr-1" />{safeNumber(user?.points)}</p></div><div className="bg-green-50 rounded-lg p-3 text-center"><p className="text-xs text-gray-500">Spent</p><p className="font-bold text-green-600">₹{safeNumber(user?.total_spent).toLocaleString('en-IN')}</p></div></div><Button variant="outline" onClick={handleLogout}>Sign Out</Button></CardContent></Card>}
           {activeTab === 'photos' && <ProfilePhotoStorage userId={user.id} />}
-          {activeTab === 'wallet' && <DigitalWallet userId={user.id} />}
+          {activeTab === 'wallet' && <DigitalWallet userId={user.id} onBalanceUpdate={(wallet) => { setUser((prev) => prev ? { ...prev, wallet_balance: wallet.balance, points: wallet.rewardPoints, store_credits: wallet.storeCredits, tier: wallet.tier, total_spent: wallet.totalSpent } : prev); }} />}
+
           {activeTab === 'orders' && <OrdersTab userId={user.id} token={token} />}
           {activeTab === 'events' && <ImportantEvents userId={user.id} />}
         </div>
