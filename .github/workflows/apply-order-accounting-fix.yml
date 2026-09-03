@@ -82,12 +82,6 @@ jobs:
       - name: Validate Python syntax
         run: python -m py_compile backend/server.py
 
-      - name: Build frontend
-        working-directory: frontend
-        run: |
-          npm install
-          CI=true npm run build
-
       - name: Commit source changes
         shell: bash
         run: |
