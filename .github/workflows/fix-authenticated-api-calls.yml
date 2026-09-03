@@ -1,0 +1,75 @@
+name: Fix authenticated API calls
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/fix-authenticated-api-calls.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Patch authentication context
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('frontend/src/context/AuthContext.js')
+          text = path.read_text()
+
+          marker = "const setAuthHeader = (token) => {\n  if (token) {\n    axios.defaults.headers.common['Authorization'] = `Bearer ${token}`;\n  } else {\n    delete axios.defaults.headers.common['Authorization'];\n  }\n};"
+
+          replacement = marker + "\n\n// Always recover the latest session token before an API request. This prevents\n// early component effects from sending protected requests without Authorization.\nconst getStoredToken = () => {\n  try {\n    const saved = localStorage.getItem('memoriesAuth');\n    const parsed = saved ? JSON.parse(saved) : null;\n    return parsed?.token || null;\n  } catch (e) {\n    return null;\n  }\n};\n\naxios.interceptors.request.use((config) => {\n  const token = getStoredToken();\n  if (token && !config.headers?.Authorization) {\n    config.headers = config.headers || {};\n    config.headers.Authorization = `Bearer ${token}`;\n  }\n  return config;\n});"
+
+          if "const getStoredToken = () =>" not in text:
+              if marker not in text:
+                  raise SystemExit('AuthContext marker not found; refusing unsafe edit')
+              text = text.replace(marker, replacement, 1)
+
+          refresh = """\n  const refreshUser = useCallback(async () => {\n    const res = await axios.get(`${API}/auth/me`);\n    setUser(res.data.user);\n    syncLegacyProfile(res.data.user);\n    return res.data.user;\n  }, []);\n"""
+          if 'const refreshUser = useCallback' not in text:
+              anchor = "  const logout = useCallback(() => {"
+              if anchor not in text:
+                  raise SystemExit('logout anchor not found; refusing unsafe edit')
+              text = text.replace(anchor, refresh + "\n" + anchor, 1)
+
+          old_provider = "value={{ user, token, loading, login, register, changePassword, logout, isAuthenticated: !!user }}"
+          new_provider = "value={{ user, token, loading, login, register, changePassword, refreshUser, logout, isAuthenticated: !!user }}"
+          if old_provider in text:
+              text = text.replace(old_provider, new_provider, 1)
+          elif 'refreshUser, logout' not in text:
+              raise SystemExit('AuthProvider value anchor not found; refusing unsafe edit')
+
+          path.write_text(text)
+          print('AuthContext patched')
+          PY
+
+      - name: Verify frontend build
+        working-directory: frontend
+        run: |
+          npm ci
+          CI=true npm run build
+
+      - name: Commit source fix
+        shell: bash
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          if git diff --quiet -- frontend/src/context/AuthContext.js; then
+            echo 'No source change needed.'
+            exit 0
+          fi
+          git add frontend/src/context/AuthContext.js
+          git commit -m 'fix: ensure authenticated API calls carry session token'
+          git push origin main
