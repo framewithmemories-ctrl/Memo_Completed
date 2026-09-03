@@ -1,0 +1,171 @@
+name: Controlled order accounting repair
+
+on:
+  pull_request_target:
+    types: [opened, synchronize]
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    if: startsWith(github.event.pull_request.head.ref, 'wallet-accounting-repair') && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          repository: ${{ github.repository }}
+          fetch-depth: 0
+      - name: Patch order accounting
+        shell: python
+        run: |
+          from pathlib import Path
+          p = Path('backend/server.py')
+          s = p.read_text(encoding='utf-8')
+
+          old = '''    payment_method: Optional[str] = None
+    payment_attempts: int = 0
+'''
+          new = '''    payment_method: Optional[str] = None
+    points_awarded: bool = False
+    spent_recorded: bool = False
+    payment_attempts: int = 0
+'''
+          if old in s and 'points_awarded: bool = False' not in s:
+              s = s.replace(old, new, 1)
+
+          old = '''    if store_credit_applied > 0:
+        updated_user = await db.users.find_one({"id": order.user_id})
+        balance_after = float((updated_user or {}).get("wallet_balance", 0.0) or 0.0)
+        await db.wallet_transactions.insert_one(
+            WalletTransaction(
+                user_id=order.user_id,
+                type="debit",
+                amount=store_credit_applied,
+                description=f"Store credit for order #{order_obj.id[:8]}",
+                category="purchase",
+                order_id=order_obj.id,
+                balance_after=balance_after,
+            ).dict()
+        )
+    
+    # Purchase points are awarded only after verified payment.
+    # Do not mutate the user's reward balance while an order is unpaid.
+
+    return order_obj
+'''
+          new = '''    if store_credit_applied > 0:
+        updated_user = await db.users.find_one({"id": order.user_id})
+        balance_after = float((updated_user or {}).get("wallet_balance", 0.0) or 0.0)
+        await db.wallet_transactions.insert_one(
+            WalletTransaction(
+                user_id=order.user_id,
+                type="debit",
+                amount=store_credit_applied,
+                description=f"Store credit for order #{order_obj.id[:8]}",
+                category="purchase",
+                order_id=order_obj.id,
+                balance_after=balance_after,
+            ).dict()
+        )
+
+    if (order.payment_method or "cod").lower() == "cod" and order.user_id:
+        pts = int(order_obj.points_earned or 0)
+        inc = {"total_spent": float(order_obj.total_amount)}
+        if pts > 0:
+            inc["points"] = pts
+        await db.users.update_one({"id": order.user_id}, {"$inc": inc})
+        await db.orders.update_one(
+            {"id": order_obj.id},
+            {"$set": {"points_awarded": True, "spent_recorded": True}},
+        )
+        if pts > 0:
+            u = await db.users.find_one({"id": order.user_id})
+            new_points = int((u or {}).get("points", 0) or 0)
+            new_tier = "Platinum" if new_points >= 5000 else "Gold" if new_points >= 2000 else "Silver"
+            await db.users.update_one({"id": order.user_id}, {"$set": {"tier": new_tier}})
+            await db.wallet_transactions.insert_one(
+                WalletTransaction(
+                    user_id=order.user_id,
+                    type="credit",
+                    amount=pts,
+                    description=f"Reward points for order #{order_obj.id[:8]}",
+                    category="rewards",
+                    order_id=order_obj.id,
+                    balance_after=float((u or {}).get("wallet_balance", 0.0) or 0.0),
+                    is_points=True,
+                ).dict()
+            )
+
+    return order_obj
+'''
+          if old not in s:
+              raise SystemExit('create_order post-insert anchor not found')
+          s = s.replace(old, new, 1)
+
+          old = '''    # Award purchase points once (idempotent via payment_status transition above)
+    pts = int(order.get("points_earned", 0) or 0)
+    if pts > 0 and order.get("user_id"):
+        u = await db.users.find_one({"id": order["user_id"]})
+        if u:
+            new_points = int(u.get("points", 0) or 0) + pts
+            new_tier = (
+                "Platinum"
+                if new_points >= 5000
+                else "Gold"
+                if new_points >= 2000
+                else "Silver"
+            )
+            await db.users.update_one(
+                {"id": order["user_id"]},
+                {"$set": {"points": new_points, "tier": new_tier}},
+            )
+'''
+          new = '''    # Award purchase points and spending once (idempotent via order flags).
+    if order.get("user_id"):
+        current_order = await db.orders.find_one({"id": payload.order_id}) or order
+        pts = int(order.get("points_earned", 0) or 0)
+        if not current_order.get("points_awarded"):
+            u = await db.users.find_one({"id": order["user_id"]})
+            if u:
+                new_points = int(u.get("points", 0) or 0) + pts
+                new_tier = "Platinum" if new_points >= 5000 else "Gold" if new_points >= 2000 else "Silver"
+                await db.users.update_one({"id": order["user_id"]}, {"$inc": {"points": pts}, "$set": {"tier": new_tier}})
+                await db.orders.update_one({"id": payload.order_id, "points_awarded": {"$ne": True}}, {"$set": {"points_awarded": True}})
+                if pts > 0:
+                    await db.wallet_transactions.insert_one(
+                        WalletTransaction(
+                            user_id=order["user_id"], type="credit", amount=pts,
+                            description=f"Reward points for order #{payload.order_id[:8]}",
+                            category="rewards", order_id=payload.order_id,
+                            balance_after=float(u.get("wallet_balance", 0.0) or 0.0), is_points=True,
+                        ).dict()
+                    )
+        if not current_order.get("spent_recorded"):
+            await db.users.update_one({"id": order["user_id"]}, {"$inc": {"total_spent": float(order.get("total_amount", 0.0) or 0.0)}})
+            await db.orders.update_one({"id": payload.order_id, "spent_recorded": {"$ne": True}}, {"$set": {"spent_recorded": True}})
+'''
+          if old not in s:
+              raise SystemExit('Razorpay reward anchor not found')
+          s = s.replace(old, new, 1)
+          p.write_text(s, encoding='utf-8')
+          print('order accounting repair source patched')
+      - name: Verify source
+        shell: python
+        run: |
+          from pathlib import Path
+          s = Path('backend/server.py').read_text(encoding='utf-8')
+          for text in ['points_awarded: bool = False', 'spent_recorded: bool = False', 'total_spent', 'Reward points for order']:
+              assert text in s, text
+          print('source verification passed')
+      - name: Commit repair and remove runner
+        shell: bash
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git rm .github/workflows/order-accounting-repair.yml .github/wallet-accounting-trigger.txt 2>/dev/null || true
+          git add backend/server.py
+          git commit -m 'fix: reconcile order spending and COD reward points'
+          git push origin HEAD:${{ github.event.pull_request.head.ref }}
